@@ -115,7 +115,9 @@ def grab_banner(ip: str, port: int, timeout: float = 2.0) -> str:
             pass
         banner = sock.recv(1024).decode("utf-8", errors="ignore").strip()
         sock.close()
-        return banner[:200]  # Truncate long banners
+        # Clean NUL characters (0x00) to avoid PostgreSQL string literal insert failure
+        cleaned_banner = banner.replace("\x00", "")
+        return cleaned_banner[:200]  # Truncate long banners
     except Exception:
         return ""
 
