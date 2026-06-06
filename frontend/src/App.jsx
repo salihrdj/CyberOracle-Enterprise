@@ -1130,6 +1130,21 @@ function App() {
                 </button>
               </div>
 
+              {window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' && (
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-5 flex gap-4 items-start shadow-md mb-6">
+                  <Shield className="w-5 h-5 text-amber shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-xs font-bold text-amber uppercase tracking-wider font-mono">Cloud Deployment Mode</h4>
+                    <p className="text-xs text-txt-dim mt-1 leading-relaxed">
+                      You are accessing the platform via a cloud deployment. The diagnostics below are auditing the security posture of the <strong>remote cloud server</strong> (Render Linux Container), not your local computer.
+                    </p>
+                    <p className="text-[11px] text-txt-faint mt-2">
+                      To scan your local Windows machine's active firewall and Windows Defender status, please run the application locally using the <code className="px-1.5 py-0.5 rounded bg-white/5 text-sky font-mono text-[10px]">./start.bat</code> launcher and navigate to <code className="px-1.5 py-0.5 rounded bg-white/5 text-sky font-mono text-[10px]">http://127.0.0.1:5173</code>.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {!sysHealth && !isSysScanning && (
                 <div className="glass p-16 text-center">
                   <Activity className="w-12 h-12 text-teal-500/40 mx-auto mb-4 animate-pulse" />
