@@ -240,8 +240,21 @@ def startup_event():
     # Database initialize
     try:
         init_db()
-        # Train ML models in database
         db = SessionLocal()
+        
+        # Seed default admin user if it does not exist
+        from database import User
+        import bcrypt
+        admin = db.query(User).filter(User.username == "admin").first()
+        if not admin:
+            print("Seeding default admin user...")
+            hashed = bcrypt.hashpw("Delta@920".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            admin_user = User(username="admin", password_hash=hashed, role="administrator")
+            db.add(admin_user)
+            db.commit()
+            print("Default admin user seeded successfully.")
+            
+        # Train ML models in database
         train_cyberoracle_models(db)
         db.close()
     except Exception as e:
