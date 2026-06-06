@@ -67,7 +67,9 @@ def is_authorized_target(ip_str: str) -> bool:
         ip = ipaddress.ip_address(ip_str)
         if ip.is_loopback:
             return False
-        allow_internal = os.getenv("ALLOW_INTERNAL_SCANS", "false").lower() == "true"
+        is_cloud = os.getenv("RENDER") is not None or os.getenv("VERCEL") is not None
+        default_allow = "true" if not is_cloud else "false"
+        allow_internal = os.getenv("ALLOW_INTERNAL_SCANS", default_allow).lower() == "true"
         if ip.is_private or ip.is_link_local or ip.is_multicast:
             return allow_internal
         return True
@@ -274,6 +276,7 @@ def full_engagement_scan(target: str, scan_id: int, db_session) -> Dict:
                 ips = [target]
             except ValueError:
                 scan.status = "failed"
+                scan.ai_summary = f"[SCAN ERROR] Cannot resolve target hostname or IP range: {target}"
                 db_session.commit()
                 return {"error": f"Cannot resolve target: {target}"}
 
@@ -283,10 +286,13 @@ def full_engagement_scan(target: str, scan_id: int, db_session) -> Dict:
         
         if not ips:
             scan.status = "failed"
-            db_session.commit()
             if unauthorized_ips:
+                scan.ai_summary = "[SCAN ERROR] Target contains private or unauthorized subnets (scanning blocked in cloud environment). Please run CyberOracle locally via start.bat to scan local/private networks."
+                db_session.commit()
                 return {"error": "Target contains private or unauthorized subnets (scanning blocked)."}
-            return {"error": f"No valid public target IPs resolved from: {target}"}
+            scan.ai_summary = f"[SCAN ERROR] No valid target IPs resolved from: {target}"
+            db_session.commit()
+            return {"error": f"No valid target IPs resolved from: {target}"}
 
         # Step 2: Discover live hosts (skip discovery for single IPs)
         if len(ips) == 1:
@@ -334,5 +340,6 @@ def full_engagement_scan(target: str, scan_id: int, db_session) -> Dict:
 
     except Exception as e:
         scan.status = "failed"
+        scan.ai_summary = f"[SCAN ERROR] Exception occurred during active scan: {str(e)}"
         db_session.commit()
         return {"error": str(e)}

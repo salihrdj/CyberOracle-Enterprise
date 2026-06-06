@@ -1003,16 +1003,36 @@ function App() {
           {page === 'clients' && scanWizard?.step === 'progress' && (
             <div className="max-w-2xl mx-auto pt-8">
               <div className="glass-strong p-10 text-center">
-                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-lavender/30 to-sky/30 flex items-center justify-center mx-auto mb-6">
-                  <RefreshCw className="w-7 h-7 text-lavender animate-spin" />
-                </div>
-                <h3 className="text-lg font-semibold text-white mb-2">Active Scanning in Progress</h3>
-                <p className="text-sm text-txt-faint mb-2">Target: <span className="text-sky font-mono">{scanTarget}</span></p>
-                <p className="text-xs text-txt-faint mb-8">Status: <span className="text-mint font-medium capitalize font-mono">{activeScan?.status || 'pending'}</span></p>
-                <div className="w-full bg-white/5 rounded-full h-1.5 mb-8">
-                  <div className="bg-gradient-to-r from-lavender to-sky h-1.5 rounded-full animate-pulse" style={{width: activeScan?.status === 'running' ? '65%' : '15%'}} />
-                </div>
-                <p className="text-[11px] text-txt-faint font-mono">Dispatched sweeps → Mapping host nodes → Fingerprinting banners → Correlating CVE exploits...</p>
+                {activeScan?.status === 'failed' ? (
+                  <>
+                    <div className="w-16 h-16 rounded-full bg-rose/10 flex items-center justify-center mx-auto mb-6 border border-rose/30">
+                      <X className="w-7 h-7 text-rose" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-rose mb-2">Scan Failed</h3>
+                    <p className="text-sm text-txt-faint mb-4">Target: <span className="text-sky font-mono">{scanTarget}</span></p>
+                    {activeScan.ai_summary && (
+                      <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-xl font-mono text-xs mb-6 max-w-md mx-auto leading-relaxed">
+                        {activeScan.ai_summary}
+                      </div>
+                    )}
+                    <button onClick={() => setScanWizard(null)} className="px-5 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl transition cursor-pointer text-xs uppercase tracking-wider font-mono">
+                      Back to Clients
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-16 h-16 rounded-full bg-gradient-to-br from-lavender/30 to-sky/30 flex items-center justify-center mx-auto mb-6">
+                      <RefreshCw className="w-7 h-7 text-lavender animate-spin" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-white mb-2">Active Scanning in Progress</h3>
+                    <p className="text-sm text-txt-faint mb-2">Target: <span className="text-sky font-mono">{scanTarget}</span></p>
+                    <p className="text-xs text-txt-faint mb-8">Status: <span className="text-mint font-medium capitalize font-mono">{activeScan?.status || 'pending'}</span></p>
+                    <div className="w-full bg-white/5 rounded-full h-1.5 mb-8">
+                      <div className="bg-gradient-to-r from-lavender to-sky h-1.5 rounded-full animate-pulse" style={{width: activeScan?.status === 'running' ? '65%' : '15%'}} />
+                    </div>
+                    <p className="text-[11px] text-txt-faint font-mono">Dispatched sweeps → Mapping host nodes → Fingerprinting banners → Correlating CVE exploits...</p>
+                  </>
+                )}
               </div>
             </div>
           )}
