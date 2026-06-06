@@ -1,0 +1,165 @@
+{
+  "name": "NextGen AI Threat Response Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "threat-alert",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        100,
+        300
+      ],
+      "id": "webhook-trigger-id"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "value1": "={{$node[\"Webhook Trigger\"].json[\"predicted_risk_level\"]}}",
+              "value2": "CRITICAL"
+            },
+            {
+              "value1": "={{$node[\"Webhook Trigger\"].json[\"predicted_risk_level\"]}}",
+              "value2": "HIGH"
+            },
+            {
+              "value1": "={{$node[\"Webhook Trigger\"].json[\"predicted_risk_level\"]}}",
+              "value2": "MEDIUM"
+            }
+          ]
+        },
+        "defaultAlternativeOutput": 3
+      },
+      "name": "Severity Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        300,
+        300
+      ],
+      "id": "severity-router-id"
+    },
+    {
+      "parameters": {
+        "channel": "soc-critical-alerts",
+        "text": "=:alert: *CRITICAL INCIDENT DETECTED*\n*Type:* {{$node[\"Webhook Trigger\"].json[\"input\"][\"attack_type\"]}}\n*Target Sector:* {{$node[\"Webhook Trigger\"].json[\"input\"][\"industry\"]}}\n*Threat Score:* {{$node[\"Webhook Trigger\"].json[\"predicted_threat_score\"]}}/100\n*Lateral Growth Prob:* {{$node[\"Webhook Trigger\"].json[\"predicted_growth_probability\"]}}%\n*Action:* Enforcing automatic host isolation. Check dashboard.",
+        "attachments": []
+      },
+      "name": "Slack High Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        550,
+        150
+      ],
+      "id": "slack-high-id"
+    },
+    {
+      "parameters": {
+        "fromEmail": "soc-response@security-hq.com",
+        "toEmail": "incident-responders@company.com, admin@company.com",
+        "subject": "=NextGen SOC Alert: {{$node[\"Webhook Trigger\"].json[\"predicted_risk_level\"]}} - {{$node[\"Webhook Trigger\"].json[\"input\"][\"attack_type\"]}}",
+        "html": "<h3>NextGen Security Incident Report Dispatched</h3><p>An automated ML-driven threat score has reached a threshold of {{$node[\"Webhook Trigger\"].json[\"predicted_threat_score\"]}}.</p><ul><li><b>Type:</b> {{$node[\"Webhook Trigger\"].json[\"input\"][\"attack_type\"]}}</li><li><b>Industry Segment:</b> {{$node[\"Webhook Trigger\"].json[\"input\"][\"industry\"]}}</li><li><b>Target Region:</b> {{$node[\"Webhook Trigger\"].json[\"input\"][\"region\"]}}</li></ul><p><b>Recommended Actions:</b><br/>{{$node[\"Webhook Trigger\"].json[\"recommended_actions\"].join('<br/>')}}</p>"
+      },
+      "name": "Email Emergency Dispatch",
+      "type": "n8n-nodes-base.email",
+      "typeVersion": 1,
+      "position": [
+        750,
+        150
+      ],
+      "id": "email-high-id"
+    },
+    {
+      "parameters": {
+        "channel": "soc-medium-alerts",
+        "text": "=:warning: *Medium Risk Alert*\n*Type:* {{$node[\"Webhook Trigger\"].json[\"input\"][\"attack_type\"]}}\n*Sector:* {{$node[\"Webhook Trigger\"].json[\"input\"][\"industry\"]}}\n*Threat Score:* {{$node[\"Webhook Trigger\"].json[\"predicted_threat_score\"]}}/100"
+      },
+      "name": "Slack Medium Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        550,
+        300
+      ],
+      "id": "slack-med-id"
+    },
+    {
+      "parameters": {
+        "text": "=Low risk logged: {{$node[\"Webhook Trigger\"].json[\"input\"][\"attack_type\"]}} against {{$node[\"Webhook Trigger\"].json[\"input\"][\"industry\"]}} ({{$node[\"Webhook Trigger\"].json[\"predicted_threat_score\"]}} score)."
+      },
+      "name": "Syslog Node",
+      "type": "n8n-nodes-base.log",
+      "typeVersion": 1,
+      "position": [
+        550,
+        480
+      ],
+      "id": "log-low-id"
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Severity Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Severity Router": {
+      "main": [
+        [
+          {
+            "node": "Slack High Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack High Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Medium Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Syslog Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack High Alert": {
+      "main": [
+        [
+          {
+            "node": "Email Emergency Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {}
+}

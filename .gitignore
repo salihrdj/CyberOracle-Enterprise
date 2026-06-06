@@ -1,0 +1,25 @@
+# Python cache & environments
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+ENV/
+backend/.env
+backend/models/*.joblib
+
+# Node & Frontend dependencies
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.eslintcache
+
+# Logs & temp files
+*.log
+*.pdf
+backend/*.pdf
+.DS_Store
+Thumbs.db
