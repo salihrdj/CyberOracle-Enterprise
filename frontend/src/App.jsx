@@ -108,6 +108,7 @@ function App() {
   // Dynamic Trend Forecasts
   const [fReq, setFReq] = useState({ region: 'Global', year: 2026, month: 'Jan' });
   const [forecast, setForecast] = useState(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
 
   // Streaming AI Chat
   const [chatHistory, setChatHistory] = useState([
@@ -308,7 +309,19 @@ function App() {
   };
 
   // Forecast predictors
-  const predict = () => axios.post(`${API}/forecast`, fReq, getHeaders()).then(r => setForecast(r.data));
+  const predict = () => {
+    setForecastLoading(true);
+    setForecast(null);
+    axios.post(`${API}/forecast`, fReq, getHeaders())
+      .then(r => {
+        setForecast(r.data);
+        setForecastLoading(false);
+      })
+      .catch(err => {
+        setForecast({ error: err.response?.data?.detail || err.message || 'Failed to fetch forecast.' });
+        setForecastLoading(false);
+      });
+  };
 
   // Pluggable AI Analyst Q&A Streaming
   const sendChat = async () => {
@@ -1279,34 +1292,44 @@ function App() {
                 </div>
               </div>
               <div className="col-span-2 space-y-6">
-                {forecast ? (
-                  <>
-                    <div className="grid grid-cols-3 gap-6">
-                      <Metric label="Predicted Attacks" value={forecast.predictedAttacks.toLocaleString()} color="#a78bfa" />
-                      <Metric label="Financial Risk" value={forecast.financialRisk} color="#fb7185" />
-                      <Metric label="Threat Score" value={`${forecast.threatScore}/100`} color="#38bdf8" />
+                {forecastLoading ? (
+                  <Loader />
+                ) : forecast ? (
+                  forecast.error ? (
+                    <div className="glass p-8 text-center text-rose border-rose/25 bg-rose/10 font-mono text-xs rounded-2xl">
+                      [ERROR] {forecast.error}
                     </div>
-                    <div className="glass p-7">
-                      <h3 className="text-sm font-medium text-txt-dim mb-4">Threat Level Gauge</h3>
-                      <div className="flex items-center gap-4">
-                        <div className="flex-1 h-2 rounded-full bg-white/5 overflow-hidden">
-                          <div className="h-full rounded-full bg-gradient-to-r from-lavender to-rose transition-all duration-700" style={{ width: `${forecast.threatScore}%` }} />
-                        </div>
-                        <span className="text-sm font-semibold text-lavender font-mono">{forecast.threatScore}%</span>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-3 gap-6">
+                        <Metric label="Predicted Attacks" value={forecast.predictedAttacks?.toLocaleString() || '0'} color="#a78bfa" />
+                        <Metric label="Financial Risk" value={forecast.financialRisk || 'N/A'} color="#fb7185" />
+                        <Metric label="Threat Score" value={`${forecast.threatScore || 0}/100`} color="#38bdf8" />
                       </div>
-                    </div>
-                    <div className="glass p-7">
-                      <h3 className="text-sm font-medium text-txt-dim mb-4">Regional Insights</h3>
-                      <div className="grid grid-cols-3 gap-4 font-mono">
-                        {[['Top Segment Target', forecast.insights.topSector, '#34d399'], ['Attack Vector Pattern', forecast.insights.topAttack, '#fbbf24'], ['Ingress Hotspot', forecast.insights.topRegion, '#fb7185']].map(([l, v, c]) => (
-                          <div key={l} className="py-3 border-r border-white/5 last:border-0 pr-2">
-                            <p className="text-[10px] text-txt-faint mb-1.5 uppercase font-bold tracking-wider">{l}</p>
-                            <p className="text-sm font-semibold truncate" style={{ color: c }}>{v}</p>
+                      <div className="glass p-7">
+                        <h3 className="text-sm font-medium text-txt-dim mb-4">Threat Level Gauge</h3>
+                        <div className="flex items-center gap-4">
+                          <div className="flex-1 h-2 rounded-full bg-white/5 overflow-hidden">
+                            <div className="h-full rounded-full bg-gradient-to-r from-lavender to-rose transition-all duration-700" style={{ width: `${forecast.threatScore || 0}%` }} />
                           </div>
-                        ))}
+                          <span className="text-sm font-semibold text-lavender font-mono">{forecast.threatScore || 0}%</span>
+                        </div>
                       </div>
-                    </div>
-                  </>
+                      {forecast.insights && (
+                        <div className="glass p-7">
+                          <h3 className="text-sm font-medium text-txt-dim mb-4">Regional Insights</h3>
+                          <div className="grid grid-cols-3 gap-4 font-mono">
+                            {[['Top Segment Target', forecast.insights.topSector, '#34d399'], ['Attack Vector Pattern', forecast.insights.topAttack, '#fbbf24'], ['Ingress Hotspot', forecast.insights.topRegion, '#fb7185']].map(([l, v, c]) => (
+                              <div key={l} className="py-3 border-r border-white/5 last:border-0 pr-2">
+                                <p className="text-[10px] text-txt-faint mb-1.5 uppercase font-bold tracking-wider">{l}</p>
+                                <p className="text-sm font-semibold truncate" style={{ color: c }}>{v}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )
                 ) : (
                   <div className="glass p-14 text-center text-txt-faint text-sm">Select region, year, and target month, and click Generate to see the regression model predictions.</div>
                 )}
