@@ -150,7 +150,7 @@ def get_ttl(ip: str) -> Optional[int]:
     return None
 
 
-def check_port(ip: str, port: int, timeout: float = 1.5) -> Optional[Dict]:
+def check_port(ip: str, port: int, timeout: float = 0.5) -> Optional[Dict]:
     """Check a single port. Returns result dict if open, None if closed."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)
@@ -169,7 +169,7 @@ def scan_host(ip: str) -> Dict:
     """Full port scan + banner grab + CVE mapping for a single host."""
     open_ports = []
 
-    scan_concurrency = int(os.getenv("SCAN_CONCURRENCY", "10"))
+    scan_concurrency = int(os.getenv("SCAN_CONCURRENCY", "100"))
     with concurrent.futures.ThreadPoolExecutor(max_workers=scan_concurrency) as executor:
         futures = {executor.submit(check_port, ip, port): port for port in FULL_PORTS}
         for future in concurrent.futures.as_completed(futures):
@@ -209,9 +209,10 @@ def scan_host(ip: str) -> Dict:
     }
 
 
-def is_host_alive(ip: str, timeout: float = 1.0) -> bool:
+def is_host_alive(ip: str, timeout: float = 0.2) -> bool:
     """Quick TCP ping to check if a host is alive."""
-    for port in [80, 443, 22, 445, 3389, 8080]:
+    # Check most common ports for local networks to discover active hosts quickly
+    for port in [135, 445, 80]:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         try:
@@ -238,7 +239,7 @@ def discover_hosts(ips: List[str], progress_callback=None) -> List[str]:
             progress_callback(done, len(ips))
         return ip if alive else None
 
-    scan_concurrency = int(os.getenv("SCAN_CONCURRENCY", "10"))
+    scan_concurrency = int(os.getenv("SCAN_CONCURRENCY", "100"))
     with concurrent.futures.ThreadPoolExecutor(max_workers=scan_concurrency) as executor:
         futures = [executor.submit(check, ip) for ip in ips]
         for f in concurrent.futures.as_completed(futures):
