@@ -22,7 +22,7 @@ const getApiBase = () => {
     if (window.location.port === '3000' || window.location.port === '5173') {
       return 'http://127.0.0.1:8000/api';
     }
-    return '/api';
+    return '/api/backend';
   }
   return 'http://127.0.0.1:8000/api';
 };
