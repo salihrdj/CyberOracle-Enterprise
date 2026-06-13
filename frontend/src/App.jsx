@@ -320,8 +320,8 @@ function App() {
       });
       if (!response.ok) throw new Error('Unauthorized credentials.');
       const data = await response.json();
-      localStorage.setItem('soc_token', data.token);
-      setToken(data.token);
+      localStorage.setItem('soc_token', data.token || data.access_token);
+      setToken(data.token || data.access_token);
     } catch (err) {
       setAuthError('Access Denied. Correct credentials: admin / Delta@920');
     } finally {

@@ -6,6 +6,7 @@
   :root {
     --background: 4 5 14;
     --foreground: 226 232 240;
+    color-scheme: dark;
   }
 
   * {
@@ -166,4 +167,15 @@
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background-color: theme('colors.txt.faint');
   }
+}
+
+/* Autofill style overrides for dark mode compatibility */
+input:-webkit-autofill,
+input:-webkit-autofill:hover, 
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: #e2e8f0 !important;
+  -webkit-box-shadow: 0 0 0px 1000px #050510 inset !important;
+  transition: background-color 5000s ease-in-out 0s;
+  caret-color: #e2e8f0;
 }
