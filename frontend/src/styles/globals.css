@@ -258,3 +258,9 @@ input:-webkit-autofill:active {
   50% { transform: translate(30px, -20px) scale(1.05); }
   100% { transform: translate(-20px, 15px) scale(0.95); }
 }
+
+/* Ensure dropdown options are visible on all systems (dark background with light text) */
+select option {
+  background-color: #0c0d21 !important;
+  color: #e2e8f0 !important;
+}

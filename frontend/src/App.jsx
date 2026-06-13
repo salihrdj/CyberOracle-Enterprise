@@ -921,7 +921,7 @@ function App() {
                         <XAxis dataKey="year" stroke="#475569" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                         <YAxis stroke="#475569" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                         <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(56,189,248,0.06)', radius: 8 }} />
-                        <Bar dataKey="financial_loss_in_million_" fill="url(#barSky)" radius={[8, 8, 0, 0]} name="Loss ($M)" filter="url(#glow)" />
+                        <Bar dataKey="financial_loss_in_million_" fill="url(#barSky)" radius={[8, 8, 0, 0]} name="Loss ($M)" />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -1433,7 +1433,7 @@ function App() {
                     <XAxis dataKey="state" stroke="#475569" tick={{ fontSize: 8 }} interval={0} angle={-45} textAnchor="end" axisLine={false} tickLine={false} />
                     <YAxis stroke="#475569" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                     <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(167,139,250,0.06)', radius: 6 }} />
-                    <Bar dataKey="detections" fill="url(#barLavender)" radius={[6, 6, 0, 0]} name="Detections" filter="url(#glow)" />
+                    <Bar dataKey="detections" fill="url(#barLavender)" radius={[6, 6, 0, 0]} name="Detections" />
                   </BarChart>
                 </GlassChart>
                 <GlassChart title="Ransomware Timeline">
@@ -1452,7 +1452,7 @@ function App() {
                     <XAxis type="number" stroke="#475569" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                     <YAxis dataKey="name" type="category" stroke="#475569" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                     <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(56,189,248,0.06)', radius: 6 }} />
-                    <Bar dataKey="value" fill="url(#barSkyH)" radius={[0, 6, 6, 0]} name="Count" filter="url(#glow)" />
+                    <Bar dataKey="value" fill="url(#barSkyH)" radius={[0, 6, 6, 0]} name="Count" />
                   </BarChart>
                 </GlassChart>
                 <GlassChart title="Incident Severity Distribution">
@@ -1462,7 +1462,7 @@ function App() {
                     <XAxis dataKey="name" stroke="#475569" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                     <YAxis stroke="#475569" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                     <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(251,191,36,0.06)', radius: 6 }} />
-                    <Bar dataKey="value" radius={[6, 6, 0, 0]} name="Count" filter="url(#glow)">
+                    <Bar dataKey="value" radius={[6, 6, 0, 0]} name="Count">
                       {net.severities.map((entry, idx) => {
                         const fills = ['url(#barRose)', 'url(#barAmber)', 'url(#barMint)'];
                         return <Cell key={idx} fill={fills[idx % fills.length]} />;
