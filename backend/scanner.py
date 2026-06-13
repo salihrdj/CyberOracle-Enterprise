@@ -29,9 +29,9 @@ def is_authorized_target(ip_str: str) -> bool:
         ip = ipaddress.ip_address(ip_str)
         if ip.is_loopback:
             return False
-        is_cloud = os.getenv("RENDER") is not None or os.getenv("VERCEL") is not None
-        default_allow = "true" if not is_cloud else "false"
-        allow_internal = os.getenv("ALLOW_INTERNAL_SCANS", default_allow).lower() == "true"
+        # SECURITY: Always default to false for internal scans regardless of environment
+        # Internal scanning must be explicitly enabled via ALLOW_INTERNAL_SCANS=true
+        allow_internal = os.getenv("ALLOW_INTERNAL_SCANS", "false").lower() == "true"
         if ip.is_private or ip.is_link_local or ip.is_multicast:
             return allow_internal
         return True

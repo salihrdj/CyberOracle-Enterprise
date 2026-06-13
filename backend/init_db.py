@@ -6,13 +6,24 @@ from database import (
     IndiaCase, GlobalThreat, NetworkAttack, OtxIntel, CveTable,
     MaliciousDomain, MaliciousIp, IndiaStateThreat, ThreatActor, User
 )
-import bcrypt
+import argon2
+from argon2 import PasswordHasher
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SQLITE_PATH = os.getenv("SQLITE_PATH", os.path.join(BASE_DIR, "..", "..", "Cybersecurity AI Analysis", "backend", "cyber_intel.db"))
 
+# Argon2id hasher (same parameters as main.py)
+_argon2_hasher = PasswordHasher(
+    time_cost=3,
+    memory_cost=65536,
+    parallelism=4,
+    hash_len=32,
+    salt_len=16,
+    type=argon2.Type.ID
+)
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    return _argon2_hasher.hash(password)
 
 def migrate_table(sqlite_conn, pg_session, table_name, model_class, field_mapping):
     cursor = sqlite_conn.cursor()
@@ -68,12 +79,16 @@ def main():
     # Create admin user if it does not exist
     admin = pg_session.query(User).filter(User.username == "admin").first()
     if not admin:
-        print("Creating default admin user...")
-        hashed = hash_password("Delta@920")
-        admin_user = User(username="admin", password_hash=hashed, role="administrator")
-        pg_session.add(admin_user)
-        pg_session.commit()
-        print("Default admin user created successfully (username: admin, password: Delta@920).")
+        admin_password = os.getenv("INIT_ADMIN_PASSWORD")
+        if admin_password:
+            print("Creating admin user from INIT_ADMIN_PASSWORD...")
+            hashed = hash_password(admin_password)
+            admin_user = User(username="admin", password_hash=hashed, role="administrator")
+            pg_session.add(admin_user)
+            pg_session.commit()
+            print("Admin user created successfully from environment.")
+        else:
+            print("No admin user exists. Set INIT_ADMIN_PASSWORD environment variable to create initial admin.")
     else:
         print("Admin user already exists.")
 

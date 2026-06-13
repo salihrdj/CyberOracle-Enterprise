@@ -1,0 +1,169 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 4 5 14;
+    --foreground: 226 232 240;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply bg-bg text-txt antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-bg/80 backdrop-blur-xl border border-border/50;
+  }
+
+  .glass-strong {
+    @apply bg-bg/90 backdrop-blur-2xl border border-border/30;
+  }
+
+  .glass-input {
+    @apply bg-bg/60 border-border/30 focus:border-accent-sky focus:ring-1 focus:ring-accent-sky transition-all;
+  }
+
+  .metric-glow {
+    @apply h-0.5 rounded-full opacity-30;
+  }
+
+  .prose-report {
+    @apply text-txt-dim text-xs leading-relaxed;
+  }
+
+  .prose-report h1 {
+    @apply text-white font-bold uppercase tracking-widest text-sm mb-4 pb-2 border-b border-border;
+  }
+
+  .prose-report h2 {
+    @apply text-accent-sky font-bold uppercase tracking-wider text-xs mt-5 mb-2;
+  }
+
+  .prose-report h3 {
+    @apply text-white font-bold text-xs mt-4 mb-2;
+  }
+
+  .prose-report p {
+    @apply mb-3 leading-relaxed;
+  }
+
+  .prose-report ul {
+    @apply space-y-1.5 mb-4 pl-0;
+  }
+
+  .prose-report ol {
+    @apply space-y-1.5 mb-4 pl-0 list-decimal;
+  }
+
+  .prose-report li {
+    @apply flex items-start gap-2 leading-relaxed;
+  }
+
+  .prose-report li::marker {
+    @apply text-accent-sky;
+  }
+
+  .prose-report strong {
+    @apply text-white font-semibold;
+  }
+
+  .prose-report code {
+    @apply px-1.5 py-0.5 rounded bg-bg/50 text-accent-sky text-xs font-mono;
+  }
+
+  .prose-report pre {
+    @apply bg-bg/50 rounded-xl p-4 overflow-x-auto mb-4;
+  }
+
+  .prose-report pre code {
+    @apply p-0 bg-transparent text-txt text-xs;
+  }
+
+  .prose-report blockquote {
+    @apply border-l-2 border-accent-sky pl-4 italic text-txt-dim my-4;
+  }
+
+  .prose-report a {
+    @apply text-accent-sky hover:text-accent-lavender underline-offset-2 hover:underline;
+  }
+
+  .prose-report table {
+    @apply w-full text-xs mb-4 border-collapse;
+  }
+
+  .prose-report th,
+  .prose-report td {
+    @apply border border-border p-2 text-left;
+  }
+
+  .prose-report th {
+    @apply bg-bg/50 font-bold text-txt;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .animate-in {
+    animation: animateIn 0.3s ease-out forwards;
+  }
+
+  @keyframes animateIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.border.light') transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: theme('colors.border.light');
+    border-radius: 3px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: theme('colors.txt.faint');
+  }
+}

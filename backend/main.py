@@ -1,6 +1,7 @@
 import os
 import asyncio
 import random
+import secrets
 import threading
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -13,7 +14,9 @@ import pandas as pd
 import numpy as np
 from jose import jwt, JWTError
 import bcrypt
-from sqlalchemy import text
+import argon2
+from argon2 import PasswordHasher
+from sqlalchemy import text, func
 from sqlalchemy.orm import Session
 import httpx
 import smtplib
@@ -24,7 +27,7 @@ from email.mime.multipart import MIMEMultipart
 from database import (
     get_db, init_db, SessionLocal, Client, Scan, ScanHost, OpenPort,
     SiemAlert, IndiaCase, GlobalThreat, NetworkAttack, OtxIntel, CveTable,
-    MaliciousDomain, MaliciousIp, IndiaStateThreat, ThreatActor, User
+    MaliciousDomain, MaliciousIp, IndiaStateThreat, ThreatActor, User, AuditLog
 )
 
 # Utility modules
@@ -37,37 +40,146 @@ from scheduler import start_scheduler
 import tempfile
 
 # ── Environment & Authentication Configuration ────────────────────────────────
-import secrets
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
-    SECRET_KEY = secrets.token_hex(32)
-    print("⚠️ [WARNING] SECRET_KEY environment variable not configured. A random session key has been generated.")
+    raise RuntimeError("SECRET_KEY environment variable is required. Generate with: openssl rand -hex 32")
+
+# JWT Key Rotation: Support multiple keys (current + previous)
+# Format: JSON dict with key_id -> secret_key mapping
+# Example: '{"key-1": "secret1", "key-2": "secret2"}'
+# Current key is the first one; previous keys are kept for token validation during rotation
+JWT_KEYS_JSON = os.getenv("JWT_KEYS", "")
+if JWT_KEYS_JSON:
+    import json
+    try:
+        JWT_KEYS = json.loads(JWT_KEYS_JSON)
+        if not isinstance(JWT_KEYS, dict) or not JWT_KEYS:
+            raise ValueError("JWT_KEYS must be a non-empty dict")
+    except Exception as e:
+        raise RuntimeError(f"Invalid JWT_KEYS format: {e}")
+else:
+    # Fallback to single SECRET_KEY for backward compatibility
+    JWT_KEYS = {"default": SECRET_KEY}
+
+# Current key ID (first key in dict for backward compat, or explicit env var)
+CURRENT_KEY_ID = os.getenv("JWT_CURRENT_KEY_ID", next(iter(JWT_KEYS)))
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 1 day
+ACCESS_TOKEN_EXPIRE_MINUTES = 15  # 15 minutes (reduced from 24 hours)
+REFRESH_TOKEN_EXPIRE_DAYS = 7
+JWT_AUDIENCE = "cyberoracle-api"
+JWT_ISSUER = "cyberoracle-auth"
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 auth_header = APIKeyHeader(name="Authorization", auto_error=False)
 
+# Argon2id hasher (preferred algorithm)
+_argon2_hasher = PasswordHasher(
+    time_cost=3,        # Iterations
+    memory_cost=65536,  # 64 MB
+    parallelism=4,      # Threads
+    hash_len=32,
+    salt_len=16,
+    type=argon2.Type.ID
+)
+
 def verify_password(plain_password, hashed_password):
+    """
+    Verify password against hash.
+    Supports both Argon2id (preferred) and bcrypt (legacy).
+    """
+    # Try Argon2id first (preferred)
+    if hashed_password.startswith("$argon2"):
+        try:
+            _argon2_hasher.verify(hashed_password, plain_password)
+            return True
+        except argon2.exceptions.VerifyMismatchError:
+            return False
+        except Exception:
+            return False
+
+    # Fallback to bcrypt for legacy hashes
     try:
         return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
     except Exception:
         return False
 
-def get_password_hash(password):
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+def get_password_hash(password):
+    """
+    Hash password using Argon2id (preferred algorithm).
+    Returns Argon2id hash string.
+    """
+    return _argon2_hasher.hash(password)
+
+
+def get_password_hash_bcrypt(password):
+    """
+    Legacy bcrypt hashing (for compatibility).
+    Use get_password_hash() for new passwords.
+    """
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(rounds=14)).decode('utf-8')
+
+
+def needs_rehash(hashed_password):
+    """
+    Check if password hash should be upgraded to Argon2id.
+    Returns True for bcrypt hashes or old Argon2id parameters.
+    """
+    if hashed_password.startswith("$argon2"):
+        # Could check parameters here if needed
+        return False
+    # bcrypt hashes start with $2b$ or $2a$ or $2y$
+    return hashed_password.startswith(("$2b$", "$2a$", "$2y$"))
+
+def _get_current_secret() -> str:
+    """Get the current signing secret."""
+    return JWT_KEYS.get(CURRENT_KEY_ID, SECRET_KEY)
+
+
+def _get_all_secrets() -> List[str]:
+    """Get all secrets for validation (current + previous)."""
+    return list(JWT_KEYS.values())
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, key_id: Optional[str] = None):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "type": "access",
+        "aud": JWT_AUDIENCE,
+        "iss": JWT_ISSUER,
+        "kid": key_id or CURRENT_KEY_ID  # Key ID for rotation
+    })
+    secret = JWT_KEYS.get(key_id or CURRENT_KEY_ID, _get_current_secret())
+    encoded_jwt = jwt.encode(to_encode, secret, algorithm=ALGORITHM, headers={"kid": key_id or CURRENT_KEY_ID})
     return encoded_jwt
 
-# Verify access token or static API Key
+
+def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None, key_id: Optional[str] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "type": "refresh",
+        "aud": JWT_AUDIENCE,
+        "iss": JWT_ISSUER,
+        "kid": key_id or CURRENT_KEY_ID
+    })
+    secret = JWT_KEYS.get(key_id or CURRENT_KEY_ID, _get_current_secret())
+    encoded_jwt = jwt.encode(to_encode, secret, algorithm=ALGORITHM, headers={"kid": key_id or CURRENT_KEY_ID})
+    return encoded_jwt
+
+# Verify access token or static API Key (supports key rotation)
 def get_current_user(
     x_api_key: Optional[str] = Depends(api_key_header),
     authorization: Optional[str] = Depends(auth_header),
@@ -78,18 +190,36 @@ def get_current_user(
         token = authorization.split(" ")[1]
     elif x_api_key:
         token = x_api_key
-        
+
     if not token:
         raise HTTPException(status_code=401, detail="Authentication credentials missing.")
-        
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token payload.")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired authentication token.")
-        
+
+    # Try all available keys for key rotation support
+    last_error = None
+    for secret in _get_all_secrets():
+        try:
+            payload = jwt.decode(
+                token,
+                secret,
+                algorithms=[ALGORITHM],
+                audience=JWT_AUDIENCE,
+                issuer=JWT_ISSUER
+            )
+            username: str = payload.get("sub")
+            if username is None:
+                raise HTTPException(status_code=401, detail="Invalid token payload.")
+            # Ensure it's an access token, not refresh token
+            if payload.get("type") != "access":
+                raise HTTPException(status_code=401, detail="Invalid token type.")
+            # Token validated successfully
+            break
+        except JWTError as e:
+            last_error = e
+            continue
+    else:
+        # All keys failed
+        raise HTTPException(status_code=401, detail=f"Invalid or expired authentication token: {str(last_error)}")
+
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found.")
@@ -108,13 +238,128 @@ allow_creds = True
 if "*" in cors_origins:
     allow_creds = False
 
+# Restrict allowed methods and headers for security
+allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+allowed_headers = [
+    "Authorization",
+    "Content-Type",
+    "Accept",
+    "Origin",
+    "X-Requested-With",
+    "X-API-Key",
+    "Sec-WebSocket-Protocol",
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=allow_creds,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=allowed_methods,
+    allow_headers=allowed_headers,
+    expose_headers=["Content-Disposition"],
+    max_age=600,  # Cache preflight for 10 minutes
 )
+
+# Security Headers Middleware
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+
+    # Content Security Policy
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "font-src 'self' data:; "
+        "connect-src 'self' ws: wss:; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+
+    # HTTP Strict Transport Security (HSTS)
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+
+    # Prevent clickjacking
+    response.headers["X-Frame-Options"] = "DENY"
+
+    # Prevent MIME type sniffing
+    response.headers["X-Content-Type-Options"] = "nosniff"
+
+    # Referrer Policy
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+    # Permissions Policy
+    response.headers["Permissions-Policy"] = (
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+        "magnetometer=(), microphone=(), payment=(), usb=()"
+    )
+
+    # Remove server header
+    response.headers.pop("Server", None)
+
+    return response
+
+# Rate Limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Audit Logging Middleware
+@app.middleware("http")
+async def audit_log_middleware(request: Request, call_next):
+    start_time = datetime.utcnow()
+    response = await call_next(request)
+    
+    # Log sensitive operations
+    sensitive_paths = ["/api/auth/login", "/api/scans", "/api/clients", "/api/scan", "/api/check-ip"]
+    should_log = any(request.url.path.startswith(p) for p in sensitive_paths) or request.method in ["POST", "PUT", "DELETE", "PATCH"]
+    
+    if should_log:
+        db = SessionLocal()
+        try:
+            # Try to get user from auth header
+            username = None
+            user_id = None
+            auth_header = request.headers.get("authorization")
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.split(" ")[1]
+                try:
+                    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                    username = payload.get("sub")
+                    if username:
+                        user = db.query(User).filter(User.username == username).first()
+                        if user:
+                            user_id = user.id
+                except JWTError:
+                    pass
+            
+            client_ip = request.client.host if request.client else None
+            user_agent = request.headers.get("user-agent", "")[:500]
+            
+            audit = AuditLog(
+                user_id=user_id,
+                username=username,
+                action=f"{request.method} {request.url.path}",
+                resource=request.url.path.split("/")[2] if len(request.url.path.split("/")) > 2 else None,
+                ip_address=client_ip,
+                user_agent=user_agent,
+                details={"query_params": dict(request.query_params)},
+                status="success" if response.status_code < 400 else "failure"
+            )
+            db.add(audit)
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+    
+    return response
 
 # ── Real-Time WebSocket Manager ────────────────────────────────────────────────
 class ConnectionManager:
@@ -187,7 +432,7 @@ async def simulate_soc_alerts_loop():
         vt_data = VirusTotalSimulator.scan_indicators(attack)
         
         event = {
-            "id": f"EV-{random.randint(10000, 99999)}",
+            "id": f"EV-{secrets.token_hex(4).upper()}",
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             "attack_type": attack,
             "industry": industry,
@@ -246,17 +491,21 @@ def startup_event():
         init_db()
         db = SessionLocal()
         
-        # Seed default admin user if it does not exist
+        # Seed admin user from environment variable if configured
         from database import User
         import bcrypt
         admin = db.query(User).filter(User.username == "admin").first()
         if not admin:
-            print("Seeding default admin user...")
-            hashed = bcrypt.hashpw("Delta@920".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-            admin_user = User(username="admin", password_hash=hashed, role="administrator")
-            db.add(admin_user)
-            db.commit()
-            print("Default admin user seeded successfully.")
+            admin_password = os.getenv("INIT_ADMIN_PASSWORD")
+            if admin_password:
+                print("Seeding admin user from INIT_ADMIN_PASSWORD...")
+                hashed = bcrypt.hashpw(admin_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                admin_user = User(username="admin", password_hash=hashed, role="administrator")
+                db.add(admin_user)
+                db.commit()
+                print("Admin user seeded successfully from environment.")
+            else:
+                print("No admin user exists. Set INIT_ADMIN_PASSWORD to create initial admin, or use the setup script.")
             
         # Train ML models in database
         train_cyberoracle_models(db)
@@ -296,7 +545,10 @@ def send_critical_email_alert(alert_data: dict):
         msg = MIMEMultipart()
         msg['From'] = smtp_user
         msg['To'] = recipient
-        msg['Subject'] = f"🚨 [CRITICAL SOC ALERT] - {alert_data.get('attack_type')} Detected in {alert_data.get('region')}"
+        # Sanitize header values to prevent email header injection
+        attack_type = alert_data.get('attack_type', 'Unknown').replace('\n', '').replace('\r', '')[:100]
+        region = alert_data.get('region', 'Unknown').replace('\n', '').replace('\r', '')[:100]
+        msg['Subject'] = f"🚨 [CRITICAL SOC ALERT] - {attack_type} Detected in {region}"
         
         # HTML Email Body
         html_body = f"""
@@ -400,8 +652,56 @@ class VirusTotalSimulator:
         }
 
 # ── WebSocket Alert Stream Route ──────────────────────────────────────────────
+async def verify_ws_token(websocket: WebSocket) -> Optional[str]:
+    """Extract and verify JWT token from WebSocket headers (Authorization or Sec-WebSocket-Protocol)."""
+    token = None
+
+    # Check Authorization header (preferred)
+    if "authorization" in websocket.headers:
+        auth_header = websocket.headers["authorization"]
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+    # Check Sec-WebSocket-Protocol header (for browser WebSocket clients)
+    elif "sec-websocket-protocol" in websocket.headers:
+        protocol = websocket.headers["sec-websocket-protocol"]
+        if protocol.startswith("auth."):
+            token = protocol[5:]  # Remove "auth." prefix
+
+    # REMOVED: Query parameter token (security risk - leaks in URLs/logs)
+    # REMOVED: X-API-Key header (confusion with API keys)
+
+    if not token:
+        return None
+
+    # Try all available keys for key rotation support
+    for secret in _get_all_secrets():
+        try:
+            payload = jwt.decode(
+                token,
+                secret,
+                algorithms=[ALGORITHM],
+                audience=JWT_AUDIENCE,
+                issuer=JWT_ISSUER
+            )
+            username: str = payload.get("sub")
+            if username is None:
+                return None
+            # Ensure it's an access token
+            if payload.get("type") != "access":
+                return None
+            return username
+        except JWTError:
+            continue
+
+    return None
+
 @app.websocket("/ws/alerts")
 async def websocket_alerts_endpoint(websocket: WebSocket):
+    username = await verify_ws_token(websocket)
+    if not username:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
+    
     await ws_manager.connect(websocket)
     try:
         # Keep connection open and send initial history cache
@@ -411,6 +711,8 @@ async def websocket_alerts_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
+    except Exception:
+        ws_manager.disconnect(websocket)
 
 # ── API Routes: Authentication ────────────────────────────────────────────────
 class LoginRequest(BaseModel):
@@ -418,33 +720,77 @@ class LoginRequest(BaseModel):
     password: str
 
 @app.post("/api/auth/login")
-def login(req: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username).first()
     if not user or not verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=400, detail="Invalid credentials. Access Denied.")
-        
+
+    # Upgrade legacy bcrypt hashes to Argon2id on successful login
+    if needs_rehash(user.password_hash):
+        user.password_hash = get_password_hash(req.password)
+        db.commit()
+
     access_token = create_access_token(data={"sub": user.username})
+    refresh_token = create_refresh_token(data={"sub": user.username})
     return {
         "authenticated": True,
-        "token": access_token,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
         "user": {"name": user.username, "role": user.role}
+    }
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+@app.post("/api/auth/refresh")
+@limiter.limit("10/minute")
+def refresh_token(request: Request, req: RefreshTokenRequest, db: Session = Depends(get_db)):
+    """Exchange refresh token for new access token."""
+    try:
+        payload = jwt.decode(
+            req.refresh_token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM],
+            audience=JWT_AUDIENCE,
+            issuer=JWT_ISSUER
+        )
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token type.")
+        username: str = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid token payload.")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
+
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found.")
+
+    # Create new access token (and optionally rotate refresh token)
+    new_access_token = create_access_token(data={"sub": user.username})
+    new_refresh_token = create_refresh_token(data={"sub": user.username})  # Rotate refresh token
+
+    return {
+        "access_token": new_access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "bearer"
     }
 
 # ── API Routes: CyberOracle Core Dashboard ────────────────────────────────────
 @app.get("/api/overview")
-def get_overview(source: str = "All", db: Session = Depends(get_db)):
+def get_overview(source: str = "All", db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
-        # Fetch India yearly counts
-        india_counts = db.execute(text(
-            "SELECT year, COUNT(*) as attack_count FROM india_cases GROUP BY year"
-        )).mappings().all()
-        # Fetch Global yearly counts
-        global_counts = db.execute(text(
-            "SELECT year, COUNT(*) as attack_count FROM global_threats GROUP BY year"
-        )).mappings().all()
+        # Fetch India yearly counts using ORM (parameterized)
+        india_counts = db.query(IndiaCase.year, func.count(IndiaCase.id).label("attack_count")).group_by(IndiaCase.year).all()
+        # Fetch Global yearly counts using ORM (parameterized)
+        global_counts = db.query(GlobalThreat.year, func.count(GlobalThreat.id).label("attack_count")).group_by(GlobalThreat.year).all()
 
-        india_yearly = {row["year"]: row["attack_count"] for row in india_counts}
-        global_yearly = {row["year"]: row["attack_count"] for row in global_counts}
+        india_yearly = {row.year: row.attack_count for row in india_counts}
+        global_yearly = {row.year: row.attack_count for row in global_counts}
     except Exception as e:
         print(f"Error reading from DB for overview trends: {e}")
         # DB fallback
@@ -470,35 +816,29 @@ def get_overview(source: str = "All", db: Session = Depends(get_db)):
     # Now calculate agg_metrics for loss and affected users
     try:
         if source == "India":
-            # Group by year for India cases mapping incident types: data_breach->1200, phishing->15, ransomware->500, malware->200, else->100
-            metrics_rows = db.execute(text("""
-                SELECT
-                    year,
-                    COALESCE(SUM(amount_lost_inr) / 83000000.0, 0.0) AS financial_loss_in_million_,
-                    COALESCE(SUM(
-                        CASE
-                            WHEN LOWER(incident_type) = 'data_breach' THEN 1200
-                            WHEN LOWER(incident_type) = 'phishing' THEN 15
-                            WHEN LOWER(incident_type) = 'ransomware' THEN 500
-                            WHEN LOWER(incident_type) = 'malware' THEN 200
-                            ELSE 100
-                        END
-                    ), 0) AS number_of_affected_users
-                FROM india_cases
-                GROUP BY year
-            """)).mappings().all()
+            # Group by year for India cases using ORM with case expression
+            from sqlalchemy import case, func
+            incident_case = case(
+                (func.lower(IndiaCase.incident_type) == 'data_breach', 1200),
+                (func.lower(IndiaCase.incident_type) == 'phishing', 15),
+                (func.lower(IndiaCase.incident_type) == 'ransomware', 500),
+                (func.lower(IndiaCase.incident_type) == 'malware', 200),
+                else_=100
+            )
+            metrics_rows = db.query(
+                IndiaCase.year,
+                func.coalesce(func.sum(IndiaCase.amount_lost_inr / 83000000.0), 0.0).label("financial_loss_in_million_"),
+                func.coalesce(func.sum(incident_case), 0).label("number_of_affected_users")
+            ).group_by(IndiaCase.year).all()
         else:
-            # For Global or All, use global_threats metrics aggregation
-            metrics_rows = db.execute(text("""
-                SELECT
-                    year,
-                    COALESCE(SUM(financial_loss_in_million_), 0.0) AS financial_loss_in_million_,
-                    COALESCE(SUM(number_of_affected_users), 0) AS number_of_affected_users
-                FROM global_threats
-                GROUP BY year
-            """)).mappings().all()
-            
-        agg_metrics = [dict(row) for row in metrics_rows]
+            # For Global or All, use global_threats metrics aggregation using ORM
+            metrics_rows = db.query(
+                GlobalThreat.year,
+                func.coalesce(func.sum(GlobalThreat.financial_loss_in_million_), 0.0).label("financial_loss_in_million_"),
+                func.coalesce(func.sum(GlobalThreat.number_of_affected_users), 0).label("number_of_affected_users")
+            ).group_by(GlobalThreat.year).all()
+
+        agg_metrics = [{"year": row.year, "financial_loss_in_million_": row.financial_loss_in_million_, "number_of_affected_users": row.number_of_affected_users} for row in metrics_rows]
     except Exception as e:
         print(f"Error reading metrics from DB: {e}")
         agg_metrics = []
@@ -539,23 +879,29 @@ def get_overview(source: str = "All", db: Session = Depends(get_db)):
     }
 
 @app.get("/api/network")
-def get_network(db: Session = Depends(get_db)):
+def get_network(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
-        protocols = db.execute(text(
-            "SELECT protocol AS name, COUNT(*) AS value FROM network_attacks GROUP BY protocol"
-        )).mappings().all()
-        
-        severities = db.execute(text(
-            "SELECT severity_level AS name, COUNT(*) AS value FROM network_attacks GROUP BY severity_level"
-        )).mappings().all()
-        
-        locations = db.execute(text(
-            "SELECT latitude, longitude FROM network_attacks WHERE latitude IS NOT NULL AND longitude IS NOT NULL LIMIT 100"
-        )).mappings().all()
-        
-        protocol_dist = [dict(row) for row in protocols]
-        severity_dist = [dict(row) for row in severities]
-        locations_list = [dict(row) for row in locations]
+        protocols = db.query(
+            NetworkAttack.protocol.label("name"),
+            func.count(NetworkAttack.id).label("value")
+        ).group_by(NetworkAttack.protocol).all()
+
+        severities = db.query(
+            NetworkAttack.severity_level.label("name"),
+            func.count(NetworkAttack.id).label("value")
+        ).group_by(NetworkAttack.severity_level).all()
+
+        locations = db.query(
+            NetworkAttack.latitude,
+            NetworkAttack.longitude
+        ).filter(
+            NetworkAttack.latitude.isnot(None),
+            NetworkAttack.longitude.isnot(None)
+        ).limit(100).all()
+
+        protocol_dist = [{"name": row.name, "value": row.value} for row in protocols]
+        severity_dist = [{"name": row.name, "value": row.value} for row in severities]
+        locations_list = [{"latitude": row.latitude, "longitude": row.longitude} for row in locations]
     except Exception as e:
         print(f"Error reading network attacks: {e}")
         protocol_dist = [{"name": "TCP", "value": 45}, {"name": "UDP", "value": 30}, {"name": "ICMP", "value": 10}]
@@ -569,13 +915,14 @@ def get_network(db: Session = Depends(get_db)):
     }
 
 @app.get("/api/india")
-def get_india_hub(db: Session = Depends(get_db)):
+def get_india_hub(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
-        state_rows = db.execute(text(
-            "SELECT state, detections FROM india_state_threats ORDER BY detections DESC"
-        )).mappings().all()
-        
-        state_dist = [dict(row) for row in state_rows]
+        state_rows = db.query(
+            IndiaStateThreat.state,
+            IndiaStateThreat.detections
+        ).order_by(IndiaStateThreat.detections.desc()).all()
+
+        state_dist = [{"state": row.state, "detections": row.detections} for row in state_rows]
         top_state = state_dist[0]["state"] if state_dist else "Unknown"
     except Exception as e:
         print(f"Error reading india state threats: {e}")
@@ -607,8 +954,19 @@ def get_tables(db: Session = Depends(get_db)):
 
 # ── API Routes: Quick Threat Scanner ──────────────────────────────────────────
 @app.get("/api/check-ip")
-def check_ip(ip: str, db: Session = Depends(get_db)):
+@limiter.limit("30/minute")
+def check_ip(request: Request, ip: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     ip = ip.strip()
+    try:
+        from scan_validator import validate_scan_target, check_scan_authorization
+        ips, _ = validate_scan_target(ip)
+        authorized, unauthorized = check_scan_authorization(ips)
+        if not authorized:
+            return {"error": True, "message": "Target not authorized for scanning."}
+        ip = authorized[0]
+    except Exception as e:
+        return {"error": True, "message": str(e)}
+    
     try:
         import ipaddress
         ipaddress.ip_address(ip)
@@ -634,13 +992,18 @@ def run_background_scan(target: str, scan_id: int):
         scan_semaphore.release()
 
 @app.get("/api/scan")
-def active_scan(ip: str):
+@limiter.limit("10/minute")
+def active_scan(request: Request, ip: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     ip = ip.strip()
     try:
-        import ipaddress
-        ipaddress.ip_address(ip)
-    except ValueError:
-        return {"error": True, "message": "Invalid IP format."}
+        from scan_validator import validate_scan_target, check_scan_authorization
+        ips, _ = validate_scan_target(ip)
+        authorized, unauthorized = check_scan_authorization(ips)
+        if not authorized:
+            return {"error": True, "message": "Target not authorized for scanning."}
+        ip = authorized[0]
+    except Exception as e:
+        return {"error": True, "message": str(e)}
 
     try:
         from scanner import scan_target
@@ -699,7 +1062,8 @@ def list_scans(client_id: int = None, db: Session = Depends(get_db)):
     } for s in scans]
 
 @app.post("/api/scans")
-def start_scan(req: ScanCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def start_scan(request: Request, req: ScanCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     client = db.query(Client).filter(Client.id == req.client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -769,7 +1133,7 @@ Use professional, technical language. Be specific and actionable. Scan data: {co
     }
 
 @app.get("/api/scans/{scan_id}/report")
-def download_report(scan_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def download_report(scan_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -790,7 +1154,11 @@ def download_report(scan_id: int, background_tasks: BackgroundTasks, db: Session
 
     background_tasks.add_task(cleanup_temp_file, tmp.name)
 
-    filename = f"CyberOracle_Report_{client.name.replace(' ', '_')}_{scan_id}.pdf"
+    # Sanitize client name for filename (prevent path traversal)
+    import re
+    safe_client_name = re.sub(r'[^a-zA-Z0-9_-]', '_', client.name) if client else "Unknown"
+    safe_client_name = safe_client_name[:50]  # Limit length
+    filename = f"CyberOracle_Report_{safe_client_name}_{scan_id}.pdf"
     return FileResponse(
         tmp.name, media_type="application/pdf",
         filename=filename,
@@ -799,19 +1167,19 @@ def download_report(scan_id: int, background_tasks: BackgroundTasks, db: Session
 
 # ── API Routes: Local Security Health Posture ─────────────────────────────────
 @app.get("/api/local-ip")
-def get_local_network_ip():
+def get_local_network_ip(current_user = Depends(get_current_user)):
     return {"ip": get_local_ip()}
 
 @app.post("/api/system-scan")
-def run_system_scan():
+def run_system_scan(current_user = Depends(get_current_user)):
     report = full_system_scan()
     context = (
         f"Firewall Status: {report['firewall']['status']} (Secure: {report['firewall']['secure']}). "
         f"Windows Defender: {report['defender']['status']} (Secure: {report['defender']['secure']}). "
         f"Active Connections: {report['network']['established_connections']}. "
     )
-    
-    prompt = f"""You are analyzing a local Windows machine's security posture. 
+
+    prompt = f"""You are analyzing a local Windows machine's security posture.
 Generate a short Markdown summary with two sections:
 ## Posture Assessment
 Briefly state if the system is secure or at risk based on the firewall and defender status.
@@ -828,7 +1196,7 @@ class ChatRequest(BaseModel):
     context: str = ""
 
 @app.post("/api/chat")
-def chat_with_ai(req: ChatRequest):
+def chat_with_ai(req: ChatRequest, current_user = Depends(get_current_user)):
     return StreamingResponse(analyze_threat_stream(req.query, req.context), media_type="text/event-stream")
 
 # ── API Routes: Machine Learning Predictions ──────────────────────────────────
@@ -838,7 +1206,8 @@ class ForecastRequest(BaseModel):
     month: str
 
 @app.post("/api/forecast")
-def get_forecast(req: ForecastRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def get_forecast(request: Request, req: ForecastRequest, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     return predict_cyberoracle_forecast(req.region, req.year, req.month, db)
 
 # ── NextGen SOC Stream Endpoints ──────────────────────────────────────────────
@@ -858,11 +1227,11 @@ class ThreatAnalysisRequest(BaseModel):
     explainability: Dict[str, float]
 
 @app.get("/api/threats/live")
-def get_live_threats():
+def get_live_threats(current_user = Depends(get_current_user)):
     return live_threats
 
 @app.get("/api/threats/history")
-def get_threat_history(db: Session = Depends(get_db)):
+def get_threat_history(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     alerts = db.query(SiemAlert).order_by(SiemAlert.timestamp.desc()).limit(100).all()
     return [{
         "attack_type": a.attack_type, "industry": a.industry, "region": a.region,
@@ -871,7 +1240,8 @@ def get_threat_history(db: Session = Depends(get_db)):
     } for a in alerts]
 
 @app.post("/api/threats/predict")
-def predict_threat(payload: ThreatInput):
+@limiter.limit("20/minute")
+def predict_threat(request: Request, payload: ThreatInput, current_user = Depends(get_current_user)):
     try:
         prediction = predict_single(
             attack_type=payload.attack_type,
@@ -924,7 +1294,8 @@ def predict_threat(payload: ThreatInput):
         raise HTTPException(status_code=500, detail="ML Prediction Engine failed. Please contact your administrator.")
 
 @app.post("/api/threats/analyze")
-def analyze_threat_incident(payload: ThreatAnalysisRequest):
+@limiter.limit("10/minute")
+def analyze_threat_incident(request: Request, payload: ThreatAnalysisRequest, current_user = Depends(get_current_user)):
     system_date = datetime.now().strftime('%Y-%m-%d')
     context = (
         f"Attack: {payload.attack_type} | Sector: {payload.industry} | "
@@ -970,7 +1341,7 @@ async def trigger_n8n_workflow(payload: Dict[str, Any]):
     email_dispatched = False
     if not n8n_success and payload.get("predicted_risk_level") in ["CRITICAL", "HIGH"]:
         alert_dict = {
-            "id": payload.get("input", {}).get("id", "EV-SOAR-" + str(random.randint(10000, 99999))),
+            "id": payload.get("input", {}).get("id", "EV-SOAR-" + secrets.token_hex(4).upper()),
             "attack_type": payload.get("input", {}).get("attack_type"),
             "industry": payload.get("input", {}).get("industry"),
             "region": payload.get("input", {}).get("region"),
@@ -988,7 +1359,7 @@ async def trigger_n8n_workflow(payload: Dict[str, Any]):
         "routing_simulation": {
             "slack_channel": "#soc-alerts-critical" if payload.get("predicted_threat_score", 0) >= 50 else "#soc-alerts-low",
             "email_dispatched_to": recipient,
-            "workflow_execution_id": f"n8n-wf-{random.randint(100000, 999999)}"
+            "workflow_execution_id": f"n8n-wf-{secrets.token_hex(6)}"
         }
     }
 

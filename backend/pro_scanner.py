@@ -4,6 +4,7 @@ import concurrent.futures
 import ipaddress
 from datetime import datetime
 from typing import List, Dict, Optional
+from scan_validator import validate_scan_target, check_scan_authorization
 
 # ── Port & Service Definitions ────────────────────────────────────────────────
 FULL_PORTS = {
@@ -67,9 +68,9 @@ def is_authorized_target(ip_str: str) -> bool:
         ip = ipaddress.ip_address(ip_str)
         if ip.is_loopback:
             return False
-        is_cloud = os.getenv("RENDER") is not None or os.getenv("VERCEL") is not None
-        default_allow = "true" if not is_cloud else "false"
-        allow_internal = os.getenv("ALLOW_INTERNAL_SCANS", default_allow).lower() == "true"
+        # SECURITY: Always default to false for internal scans regardless of environment
+        # Internal scanning must be explicitly enabled via ALLOW_INTERNAL_SCANS=true
+        allow_internal = os.getenv("ALLOW_INTERNAL_SCANS", "false").lower() == "true"
         if ip.is_private or ip.is_link_local or ip.is_multicast:
             return allow_internal
         return True
@@ -78,28 +79,11 @@ def is_authorized_target(ip_str: str) -> bool:
 
 def resolve_target(target: str) -> List[str]:
     """
-    Given any target (IP, hostname, CIDR, or domain), return a list of IPs to scan.
+    Given a target (IP or CIDR only), return a list of IPs to scan.
+    Uses centralized scan validator for consistent validation.
     """
-    target = target.strip()
-    ips = []
-
-    # Try CIDR subnet (e.g. 192.168.1.0/24)
-    try:
-        net = ipaddress.ip_network(target, strict=False)
-        ips = [str(host) for host in net.hosts()]
-        return ips
-    except ValueError:
-        pass
-
-    # Try resolving as hostname / domain
-    try:
-        resolved = socket.getaddrinfo(target, None)
-        ips = list({r[4][0] for r in resolved})
-        return ips
-    except socket.gaierror:
-        pass
-
-    return []
+    ips, _ = validate_scan_target(target)
+    return ips
 
 
 def grab_banner(ip: str, port: int, timeout: float = 2.0) -> str:
@@ -271,26 +255,22 @@ def full_engagement_scan(target: str, scan_id: int, db_session) -> Dict:
 
     try:
         # Step 1: Resolve
-        ips = resolve_target(target)
-        if not ips:
-            # Single IP fallback
-            try:
-                ipaddress.ip_address(target)
-                ips = [target]
-            except ValueError:
-                scan.status = "failed"
-                scan.ai_summary = f"[SCAN ERROR] Cannot resolve target hostname or IP range: {target}"
-                db_session.commit()
-                return {"error": f"Cannot resolve target: {target}"}
+        try:
+            ips = resolve_target(target)
+        except ValueError as e:
+            scan.status = "failed"
+            scan.ai_summary = f"[SCAN ERROR] Invalid target: {str(e)}"
+            db_session.commit()
+            return {"error": f"Invalid target: {str(e)}"}
 
-        # Filter to authorized targets only
-        unauthorized_ips = [ip for ip in ips if not is_authorized_target(ip)]
-        ips = [ip for ip in ips if is_authorized_target(ip)]
+        # Filter to authorized targets only using centralized validator
+        authorized_ips, unauthorized_ips = check_scan_authorization(ips)
+        ips = authorized_ips
         
         if not ips:
             scan.status = "failed"
             if unauthorized_ips:
-                scan.ai_summary = "[SCAN ERROR] Target contains private or unauthorized subnets (scanning blocked in cloud environment). Please run CyberOracle locally via start.bat to scan local/private networks."
+                scan.ai_summary = "[SCAN ERROR] Target contains private or unauthorized subnets (scanning blocked). Configure ALLOW_INTERNAL_SCANS or ALLOWED_SCAN_NETWORKS to permit."
                 db_session.commit()
                 return {"error": "Target contains private or unauthorized subnets (scanning blocked)."}
             scan.ai_summary = f"[SCAN ERROR] No valid target IPs resolved from: {target}"
