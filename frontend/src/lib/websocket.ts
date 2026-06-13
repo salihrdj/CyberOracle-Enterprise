@@ -32,11 +32,11 @@ class WebSocketManager {
   private shouldReconnect = true;
   private token: string | null = null;
 
-  async connect(token?: string): Promise<void> {
+  async connect(token?: string | null): Promise<void> {
     if (this.ws?.readyState === WebSocket.OPEN || this.isConnecting) return;
 
     this.isConnecting = true;
-    this.token = token;
+    this.token = token || null;
 
     try {
       const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
@@ -94,11 +94,7 @@ class WebSocketManager {
     this.token = null;
   }
 
-  // Deprecated - kept for backward compatibility
-  private buildWsUrl(): string {
-    const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-    return baseUrl;
-  }
+
 
   on(type: string, handler: MessageHandler): () => void {
     if (!this.handlers.has(type)) {

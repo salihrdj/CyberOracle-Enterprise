@@ -1,7 +1,7 @@
 'use client';
 
 import { Bell, Radio, ChevronDown } from 'lucide-react';
-import { useSession } from '@auth0/nextjs-auth0';
+import { useUser } from '@auth0/nextjs-auth0/client';
 
 interface HeaderProps {
   children?: React.ReactNode;
@@ -10,7 +10,7 @@ interface HeaderProps {
 }
 
 export function Header({ children, filter, onFilterChange }: HeaderProps) {
-  const { user, isLoading } = useSession();
+  const { user, isLoading } = useUser();
 
   return (
     <header className="sticky top-0 z-30 px-8 py-4 flex items-center justify-between border-b border-border/30 glass-strong bg-bg/80 backdrop-blur-xl">

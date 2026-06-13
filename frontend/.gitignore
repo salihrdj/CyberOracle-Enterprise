@@ -22,3 +22,19 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Next.js
+.next/
+out/
+build/
+
+# env files
+.env
+.env.local
+.env.production
+.env.development
+.env.staging
+.env.production.local
+.env.development.local
+.env.staging.local
+

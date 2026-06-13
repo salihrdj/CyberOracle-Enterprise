@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { Shield } from 'lucide-react';
 
 export default function CallbackPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   useEffect(() => {
     // Auth0 handles the callback automatically via the API route

@@ -12,10 +12,6 @@ const nextConfig = {
         source: '/api/backend/:path*',
         destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/:path*`,
       },
-      {
-        source: '/ws/:path*',
-        destination: `${process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'}/ws/:path*`,
-      },
     ];
   },
   async headers() {

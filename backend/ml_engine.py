@@ -1,6 +1,7 @@
 import os
 import joblib
 import threading
+import hashlib
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -12,6 +13,47 @@ from database import GlobalThreat, IndiaCase
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, 'models')
 os.makedirs(MODEL_DIR, exist_ok=True)
+
+MODEL_HASHES_FILE = os.path.join(MODEL_DIR, 'model_hashes.json')
+
+def compute_file_hash(filepath: str) -> str:
+    """Compute SHA256 hash of a file."""
+    sha256 = hashlib.sha256()
+    with open(filepath, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+def save_model_hashes():
+    """Save hashes of model files for integrity verification."""
+    hashes = {}
+    for fname in ['rf_threat_model.joblib', 'rf_growth_model.joblib', 'feature_cols.joblib']:
+        fpath = os.path.join(MODEL_DIR, fname)
+        if os.path.exists(fpath):
+            hashes[fname] = compute_file_hash(fpath)
+    with open(MODEL_HASHES_FILE, 'w') as f:
+        import json
+        json.dump(hashes, f)
+
+def verify_model_hashes() -> bool:
+    """Verify model file hashes match stored values."""
+    if not os.path.exists(MODEL_HASHES_FILE):
+        return False
+    try:
+        with open(MODEL_HASHES_FILE, 'r') as f:
+            import json
+            stored_hashes = json.load(f)
+        for fname, stored_hash in stored_hashes.items():
+            fpath = os.path.join(MODEL_DIR, fname)
+            if not os.path.exists(fpath):
+                return False
+            current_hash = compute_file_hash(fpath)
+            if current_hash != stored_hash:
+                print(f"WARNING: Model file hash mismatch for {fname}")
+                return False
+        return True
+    except Exception:
+        return False
 
 # ──────────────────────────────────────────────────────────────────────────────
 # NextGen Model Constants & Logic
@@ -64,6 +106,7 @@ def train_nextgen_models(csv_path: str):
     joblib.dump(rf_threat, os.path.join(MODEL_DIR, 'rf_threat_model.joblib'))
     joblib.dump(rf_growth, os.path.join(MODEL_DIR, 'rf_growth_model.joblib'))
     joblib.dump(feature_cols, os.path.join(MODEL_DIR, 'feature_cols.joblib'))
+    save_model_hashes()
     print("NextGen ML models trained successfully.")
 
 # Cache NextGen regressor models globally in memory
@@ -85,6 +128,10 @@ def predict_single(attack_type, industry, region, severity):
             # Train on default CSV path
             csv_path = os.path.join(BASE_DIR, 'data', 'cybersecurity_attacks.csv')
             train_nextgen_models(csv_path)
+        
+        # Verify model integrity before loading
+        if not verify_model_hashes():
+            raise RuntimeError("Model integrity check failed. Model files may have been tampered with.")
             
         if cached_rf_threat is None:
             cached_rf_threat = joblib.load(rf_threat_path)

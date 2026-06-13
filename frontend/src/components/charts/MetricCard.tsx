@@ -28,7 +28,7 @@ export function MetricCard({ label, value, delta, color, icon, className = '' }:
           </div>
         )}
       </div>
-      <div className="metric-glow w-16 mt-4" style={{ '--glow-color': color }} />
+      <div className="metric-glow w-16 mt-4" style={{ '--glow-color': color } as React.CSSProperties} />
     </div>
   );
 }

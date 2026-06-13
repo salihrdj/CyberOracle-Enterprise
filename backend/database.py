@@ -156,5 +156,19 @@ class ThreatActor(Base):
     risk_level = Column(String(50))
     attacks = Column(Text)
 
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    user_id = Column(Integer, nullable=True)
+    username = Column(String(100), nullable=True)
+    action = Column(String(100), nullable=False)
+    resource = Column(String(100), nullable=True)
+    resource_id = Column(String(100), nullable=True)
+    ip_address = Column(String(50), nullable=True)
+    user_agent = Column(String(500), nullable=True)
+    details = Column(JSON, default=dict)
+    status = Column(String(20), default="success")
+
 def init_db():
     Base.metadata.create_all(bind=engine)
