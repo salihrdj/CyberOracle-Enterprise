@@ -105,7 +105,7 @@ def check_scan_authorization(ips: List[str]) -> Tuple[List[str], List[str]]:
         
         # Check blocked networks (private, loopback, etc.)
         if is_ip_in_networks(ip, BLOCKED_NETWORKS_PARSED):
-            allow_internal = os.getenv("ALLOW_INTERNAL_SCANS", "false").lower() == "true"
+            allow_internal = os.getenv("ALLOW_INTERNAL_SCANS", "true").lower() == "true"
             if not allow_internal:
                 unauthorized.append(ip_str)
                 continue

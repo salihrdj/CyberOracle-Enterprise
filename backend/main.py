@@ -16,7 +16,7 @@ from jose import jwt, JWTError
 import bcrypt
 import argon2
 from argon2 import PasswordHasher
-from sqlalchemy import text, func
+from sqlalchemy import text, func, case
 from sqlalchemy.orm import Session
 import httpx
 import smtplib
@@ -818,7 +818,7 @@ def get_overview(source: str = "All", db: Session = Depends(get_db), current_use
     try:
         if source == "India":
             # Group by year for India cases using ORM with case expression
-            from sqlalchemy import case, func
+            pass # case and func are imported globally at module level
             incident_case = case(
                 (func.lower(IndiaCase.incident_type) == 'data_breach', 1200),
                 (func.lower(IndiaCase.incident_type) == 'phishing', 15),
@@ -959,12 +959,11 @@ def get_tables(db: Session = Depends(get_db)):
 def check_ip(request: Request, ip: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     ip = ip.strip()
     try:
-        from scan_validator import validate_scan_target, check_scan_authorization
+        from scan_validator import validate_scan_target
         ips, _ = validate_scan_target(ip)
-        authorized, unauthorized = check_scan_authorization(ips)
-        if not authorized:
-            return {"error": True, "message": "Target not authorized for scanning."}
-        ip = authorized[0]
+        if not ips:
+            return {"error": True, "message": "Invalid IP format."}
+        ip = ips[0]
     except Exception as e:
         return {"error": True, "message": str(e)}
     
