@@ -297,7 +297,8 @@ async def security_headers_middleware(request: Request, call_next):
     )
 
     # Remove server header
-    response.headers.pop("Server", None)
+    if "Server" in response.headers:
+        del response.headers["Server"]
 
     return response
 
