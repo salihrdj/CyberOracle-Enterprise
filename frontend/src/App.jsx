@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
@@ -12,20 +14,37 @@ import {
   Bell, Terminal, Cpu 
 } from 'lucide-react';
 
-const apiBase = import.meta.env.VITE_API_URL || (
-  typeof window !== 'undefined' && (window.location.port === '5173')
-    ? 'http://127.0.0.1:8000/api'
-    : '/api'
-);
+const getApiBase = () => {
+  if (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  if (typeof window !== 'undefined') {
+    if (window.location.port === '3000' || window.location.port === '5173') {
+      return 'http://127.0.0.1:8000/api';
+    }
+    return '/api';
+  }
+  return 'http://127.0.0.1:8000/api';
+};
+
+const apiBase = getApiBase();
 const API = apiBase;
-const wsDefault = apiBase.startsWith('http')
-  ? (apiBase.startsWith('https') 
-      ? apiBase.replace('https://', 'wss://').replace('/api', '/ws/alerts')
-      : apiBase.replace('http://', 'ws://').replace('/api', '/ws/alerts'))
-  : (typeof window !== 'undefined'
-      ? (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws/alerts'
-      : 'ws://127.0.0.1:8000/ws/alerts');
-const WS_URL = import.meta.env.VITE_WS_URL || wsDefault;
+
+const getWsUrl = () => {
+  if (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_WS_URL) {
+    return process.env.NEXT_PUBLIC_WS_URL;
+  }
+  const wsDefault = apiBase.startsWith('http')
+    ? (apiBase.startsWith('https') 
+        ? apiBase.replace('https://', 'wss://').replace('/api', '/ws/alerts')
+        : apiBase.replace('http://', 'ws://').replace('/api', '/ws/alerts'))
+    : (typeof window !== 'undefined'
+        ? (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws/alerts'
+        : 'ws://127.0.0.1:8000/ws/alerts');
+  return wsDefault;
+};
+
+const WS_URL = getWsUrl();
 const TT = { 
   backgroundColor: 'rgba(15,15,30,0.9)', 
   border: '1px solid rgba(255,255,255,0.1)', 
@@ -83,14 +102,39 @@ const GradientDefs = () => (
 );
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem('soc_token') || '');
+  const [token, setToken] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('soc_token') || '';
+    }
+    return '';
+  });
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
   // Tabs navigation
-  const [page, setPage] = useState('siem'); // Default is unified live monitor
+  const [page, setPage] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const pathParts = window.location.pathname.split('/');
+      const lastPart = pathParts[pathParts.length - 1];
+      const validTabs = ['siem', 'dashboard', 'clients', 'system', 'ai', 'forecast', 'network', 'scanner', 'intelligence'];
+      if (lastPart && validTabs.includes(lastPart)) {
+        return lastPart;
+      }
+    }
+    return 'siem';
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const currentPath = window.location.pathname;
+      const targetPath = `/dashboard/${page}`;
+      if (currentPath !== targetPath && (currentPath === '/' || currentPath.startsWith('/dashboard'))) {
+        window.history.pushState(null, '', targetPath);
+      }
+    }
+  }, [page]);
 
   // Global layouts & charts
   const [filter, setFilter] = useState('All');
@@ -211,7 +255,8 @@ function App() {
       pollInterval = setInterval(fetchAlerts, 5000);
     };
 
-    if (import.meta.env.VITE_POLL_ONLY === 'true') {
+    const isPollOnly = typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_POLL_ONLY === 'true';
+    if (isPollOnly) {
       startPolling();
       return () => {
         if (pollInterval) clearInterval(pollInterval);
