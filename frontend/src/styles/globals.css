@@ -36,19 +36,48 @@
 
 @layer components {
   .glass {
-    @apply bg-bg/80 backdrop-blur-xl border border-border/50;
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
   }
 
   .glass-strong {
-    @apply bg-bg/90 backdrop-blur-2xl border border-border/30;
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 20px;
+  }
+
+  .glass-sidebar {
+    background: rgba(10, 10, 30, 0.5);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
   }
 
   .glass-input {
-    @apply bg-bg/60 border-border/30 focus:border-accent-sky focus:ring-1 focus:ring-accent-sky transition-all;
+    background: rgba(255, 255, 255, 0.07);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+    transition: all 0.15s ease-in-out;
+  }
+
+  .glass-input:focus {
+    border-color: rgba(167, 139, 250, 0.4);
+    outline: none;
   }
 
   .metric-glow {
-    @apply h-0.5 rounded-full opacity-30;
+    background: linear-gradient(90deg, var(--glow-color), transparent);
+    height: 2px;
+    border-radius: 2px;
+    margin-top: 12px;
+    opacity: 0.5;
   }
 
   .prose-report {
@@ -178,4 +207,54 @@ input:-webkit-autofill:active {
   -webkit-box-shadow: 0 0 0px 1000px #050510 inset !important;
   transition: background-color 5000s ease-in-out 0s;
   caret-color: #e2e8f0;
+}
+
+/* Ambient background glowing blobs */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.12;
+  animation: drift 20s ease-in-out infinite alternate;
+}
+
+.blob-1 {
+  width: 600px;
+  height: 600px;
+  background: #a78bfa;
+  top: -10%;
+  left: -5%;
+  animation-delay: 0s;
+}
+
+.blob-2 {
+  width: 500px;
+  height: 500px;
+  background: #38bdf8;
+  bottom: -15%;
+  right: -10%;
+  animation-delay: -7s;
+}
+
+.blob-3 {
+  width: 400px;
+  height: 400px;
+  background: #34d399;
+  top: 40%;
+  left: 50%;
+  animation-delay: -14s;
+}
+
+@keyframes drift {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(30px, -20px) scale(1.05); }
+  100% { transform: translate(-20px, 15px) scale(0.95); }
 }
