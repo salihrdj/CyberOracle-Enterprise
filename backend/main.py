@@ -784,7 +784,7 @@ class LoginRequest(BaseModel):
     password: str
 
 @app.post("/api/auth/login")
-@limiter.limit("5/minute")
+@limiter.limit("60/minute")
 def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username).first()
     if not user or not verify_password(req.password, user.password_hash):
@@ -823,7 +823,7 @@ class RefreshTokenRequest(BaseModel):
 
 
 @app.post("/api/auth/refresh")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def refresh_token(request: Request, req: RefreshTokenRequest, db: Session = Depends(get_db)):
     """Exchange refresh token for new access token with rotation and key rotation support."""
     # Try all available keys for validation
@@ -902,7 +902,7 @@ def refresh_token(request: Request, req: RefreshTokenRequest, db: Session = Depe
 
 # ── API Routes: CyberOracle Core Dashboard ────────────────────────────────────
 @app.get("/api/overview")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def get_overview(request: Request, source: str = "All", db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
         # Fetch India yearly counts using ORM (parameterized)
@@ -1000,7 +1000,7 @@ def get_overview(request: Request, source: str = "All", db: Session = Depends(ge
     }
 
 @app.get("/api/network")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def get_network(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
         protocols = db.query(
@@ -1037,7 +1037,7 @@ def get_network(request: Request, db: Session = Depends(get_db), current_user = 
     }
 
 @app.get("/api/india")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def get_india_hub(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
         state_rows = db.query(
@@ -1067,7 +1067,7 @@ def get_india_hub(request: Request, db: Session = Depends(get_db), current_user 
 
 
 @app.get("/api/tables")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def get_tables(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     actors = db.query(ThreatActor).limit(50).all()
     cves = db.query(CveTable).limit(50).all()
@@ -1078,7 +1078,7 @@ def get_tables(request: Request, db: Session = Depends(get_db), current_user = D
 
 # ── API Routes: Quick Threat Scanner ──────────────────────────────────────────
 @app.get("/api/check-ip")
-@limiter.limit("30/minute")
+@limiter.limit("150/minute")
 def check_ip(request: Request, ip: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     ip = ip.strip()
     try:
@@ -1115,7 +1115,7 @@ def run_background_scan(target: str, scan_id: int):
         scan_semaphore.release()
 
 @app.get("/api/scan")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def active_scan(request: Request, ip: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     ip = ip.strip()
     try:
@@ -1141,7 +1141,7 @@ class ClientCreate(BaseModel):
     description: str = ""
 
 @app.get("/api/clients")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def list_clients(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     clients = db.query(Client).order_by(Client.created_at.desc()).all()
     return [{
@@ -1151,7 +1151,7 @@ def list_clients(request: Request, db: Session = Depends(get_db), current_user =
     } for c in clients]
 
 @app.post("/api/clients")
-@limiter.limit("5/minute")
+@limiter.limit("60/minute")
 def create_client(request: Request, req: ClientCreate, db: Session = Depends(get_db), current_user = Depends(require_role("operator"))):
     client = Client(name=req.name, description=req.description)
     db.add(client)
@@ -1160,7 +1160,7 @@ def create_client(request: Request, req: ClientCreate, db: Session = Depends(get
     return {"id": client.id, "name": client.name}
 
 @app.delete("/api/clients/{client_id}")
-@limiter.limit("5/minute")
+@limiter.limit("60/minute")
 def delete_client(request: Request, client_id: int, db: Session = Depends(get_db), current_user = Depends(require_role("administrator"))):
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
@@ -1174,7 +1174,7 @@ class ScanCreate(BaseModel):
     target: str
 
 @app.get("/api/scans")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def list_scans(request: Request, client_id: int = None, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     q = db.query(Scan)
     if client_id:
@@ -1189,7 +1189,7 @@ def list_scans(request: Request, client_id: int = None, db: Session = Depends(ge
     } for s in scans]
 
 @app.post("/api/scans")
-@limiter.limit("5/minute")
+@limiter.limit("60/minute")
 def start_scan(request: Request, req: ScanCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user = Depends(require_role("operator"))):
     client = db.query(Client).filter(Client.id == req.client_id).first()
     if not client:
@@ -1206,7 +1206,7 @@ def start_scan(request: Request, req: ScanCreate, background_tasks: BackgroundTa
     return {"scan_id": scan_id, "status": "pending", "message": "Scan queued in background."}
 
 @app.get("/api/scans/{scan_id}")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def get_scan(request: Request, scan_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -1261,7 +1261,7 @@ Use professional, technical language. Be specific and actionable. Scan data: {co
     }
 
 @app.get("/api/scans/{scan_id}/report")
-@limiter.limit("5/minute")
+@limiter.limit("60/minute")
 def download_report(request: Request, scan_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -1295,12 +1295,12 @@ def download_report(request: Request, scan_id: int, background_tasks: Background
 
 # ── API Routes: Local Security Health Posture ─────────────────────────────────
 @app.get("/api/local-ip")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def get_local_network_ip(request: Request, current_user = Depends(get_current_user)):
     return {"ip": get_local_ip()}
 
 @app.post("/api/system-scan")
-@limiter.limit("2/minute")
+@limiter.limit("10/minute")
 def run_system_scan(request: Request, current_user = Depends(require_role("administrator"))):
     report = full_system_scan()
     context = (
@@ -1326,7 +1326,7 @@ class ChatRequest(BaseModel):
     context: str = Field("", max_length=10000)
 
 @app.post("/api/chat")
-@limiter.limit("5/minute")
+@limiter.limit("60/minute")
 def chat_with_ai(request: Request, req: ChatRequest, current_user = Depends(get_current_user)):
     return StreamingResponse(analyze_threat_stream(req.query, req.context), media_type="text/event-stream")
 
@@ -1337,7 +1337,7 @@ class ForecastRequest(BaseModel):
     month: str
 
 @app.post("/api/forecast")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def get_forecast(request: Request, req: ForecastRequest, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     return predict_cyberoracle_forecast(req.region, req.year, req.month, db)
 
@@ -1367,12 +1367,12 @@ class N8nTriggerPayload(BaseModel):
     model_config = {"extra": "ignore"}
 
 @app.get("/api/threats/live")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def get_live_threats(request: Request, current_user = Depends(get_current_user)):
     return live_threats
 
 @app.get("/api/threats/history")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def get_threat_history(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     alerts = db.query(SiemAlert).order_by(SiemAlert.timestamp.desc()).limit(100).all()
     return [{
@@ -1382,7 +1382,7 @@ def get_threat_history(request: Request, db: Session = Depends(get_db), current_
     } for a in alerts]
 
 @app.post("/api/threats/predict")
-@limiter.limit("20/minute")
+@limiter.limit("100/minute")
 def predict_threat(request: Request, payload: ThreatInput, current_user = Depends(get_current_user)):
     try:
         prediction = predict_single(
@@ -1436,7 +1436,7 @@ def predict_threat(request: Request, payload: ThreatInput, current_user = Depend
         raise HTTPException(status_code=500, detail="ML Prediction Engine failed. Please contact your administrator.")
 
 @app.post("/api/threats/analyze")
-@limiter.limit("10/minute")
+@limiter.limit("100/minute")
 def analyze_threat_incident(request: Request, payload: ThreatAnalysisRequest, current_user = Depends(get_current_user)):
     system_date = datetime.now().strftime('%Y-%m-%d')
     context = (
@@ -1461,7 +1461,7 @@ Explain the attack vector, machine learning features context, and outline a reco
     }
 
 @app.post("/api/threats/trigger-n8n")
-@limiter.limit("5/minute")
+@limiter.limit("60/minute")
 async def trigger_n8n_workflow(request: Request, payload: N8nTriggerPayload, current_user = Depends(require_role("administrator"))):
     webhook_url = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/threat-alert")
     webhook_secret = os.getenv("N8N_WEBHOOK_SECRET", "")
