@@ -789,6 +789,14 @@ class LoginRequest(BaseModel):
 @limiter.limit("60/minute")
 def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Login attempt: username={req.username}")
+    try:
+        from database import DATABASE_URL
+        import urllib.parse
+        parsed = urllib.parse.urlparse(DATABASE_URL)
+        redacted_url = f"{parsed.scheme}://{parsed.username}@{parsed.hostname}:{parsed.port}{parsed.path}"
+        print(f"[DEBUG] DB Connection URL: {redacted_url}")
+    except Exception as e:
+        print(f"[DEBUG] Failed to parse DB URL: {e}")
     user = db.query(User).filter(User.username == req.username).first()
     print(f"[DEBUG] User found in DB: {user is not None}")
     if user:
