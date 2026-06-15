@@ -62,7 +62,7 @@ def scan_target(ip: str, ports: List[int] = None) -> List[Dict]:
     
     open_ports = []
     # Use ThreadPoolExecutor with controlled concurrency
-    scan_concurrency = int(os.getenv("SCAN_CONCURRENCY", "10"))
+    scan_concurrency = min(int(os.getenv("SCAN_CONCURRENCY", "10")), 50)
     with concurrent.futures.ThreadPoolExecutor(max_workers=scan_concurrency) as executor:
         futures = {executor.submit(check_port, ip, port): port for port in ports}
         for future in concurrent.futures.as_completed(futures):

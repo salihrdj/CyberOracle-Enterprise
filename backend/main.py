@@ -1,7 +1,11 @@
 import os
+import re
+import html
+import ssl
 import asyncio
 import random
 import secrets
+import hashlib
 import threading
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -27,7 +31,8 @@ from email.mime.multipart import MIMEMultipart
 from database import (
     get_db, init_db, SessionLocal, Client, Scan, ScanHost, OpenPort,
     SiemAlert, IndiaCase, GlobalThreat, NetworkAttack, OtxIntel, CveTable,
-    MaliciousDomain, MaliciousIp, IndiaStateThreat, ThreatActor, User, AuditLog
+    MaliciousDomain, MaliciousIp, IndiaStateThreat, ThreatActor, User, AuditLog,
+    RefreshToken
 )
 
 # Utility modules
@@ -225,6 +230,28 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="User not found.")
     return user
 
+
+# ── Role-Based Access Control ─────────────────────────────────────────────────────
+def require_role(required_role: str):
+    """
+    Dependency factory that checks if the current user has the required role.
+    Administrators always pass; other roles are checked for exact match.
+
+    Usage:
+        @app.get("/api/sensitive")
+        def sensitive_endpoint(current_user = Depends(require_role("administrator"))):
+            ...
+    """
+    def role_checker(current_user = Depends(get_current_user)):
+        if current_user.role != "administrator" and current_user.role != required_role:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Insufficient permissions. Required role: {required_role}"
+            )
+        return current_user
+    return role_checker
+
+
 # ── App Initialization ────────────────────────────────────────────────────────
 app = FastAPI(
     title="CyberOracle Enterprise Suite API",
@@ -237,6 +264,11 @@ cors_origins = os.getenv("ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localh
 allow_creds = True
 if "*" in cors_origins:
     allow_creds = False
+
+# Prevent dangerous CORS configuration at startup
+if "*" in cors_origins and allow_creds:
+    raise RuntimeError("Cannot use wildcard CORS (*) with credentials enabled. "
+                        "Specify explicit origins or disable credentials.")
 
 # Restrict allowed methods and headers for security
 allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
@@ -314,13 +346,12 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Audit Logging Middleware
 @app.middleware("http")
 async def audit_log_middleware(request: Request, call_next):
-    start_time = datetime.utcnow()
     response = await call_next(request)
-    
+
     # Log sensitive operations
     sensitive_paths = ["/api/auth/login", "/api/scans", "/api/clients", "/api/scan", "/api/check-ip"]
     should_log = any(request.url.path.startswith(p) for p in sensitive_paths) or request.method in ["POST", "PUT", "DELETE", "PATCH"]
-    
+
     if should_log:
         db = SessionLocal()
         try:
@@ -339,10 +370,20 @@ async def audit_log_middleware(request: Request, call_next):
                             user_id = user.id
                 except JWTError:
                     pass
-            
+
             client_ip = request.client.host if request.client else None
-            user_agent = request.headers.get("user-agent", "")[:500]
-            
+
+            # Sanitize User-Agent: strip CRLF and control characters to prevent log injection
+            raw_ua = request.headers.get("user-agent", "")
+            user_agent = re.sub(r'[\r\n\x00-\x1f\x7f-\x9f]', '', raw_ua)[:500]
+
+            # Redact sensitive query parameters
+            sensitive_params = {"ip", "token", "api_key", "secret", "password", "key"}
+            filtered_params = {
+                k: ("[REDACTED]" if k.lower() in sensitive_params else v)
+                for k, v in request.query_params.items()
+            }
+
             audit = AuditLog(
                 user_id=user_id,
                 username=username,
@@ -350,7 +391,7 @@ async def audit_log_middleware(request: Request, call_next):
                 resource=request.url.path.split("/")[2] if len(request.url.path.split("/")) > 2 else None,
                 ip_address=client_ip,
                 user_agent=user_agent,
-                details={"query_params": dict(request.query_params)},
+                details={"query_params": filtered_params},
                 status="success" if response.status_code < 400 else "failure"
             )
             db.add(audit)
@@ -359,7 +400,7 @@ async def audit_log_middleware(request: Request, call_next):
             db.rollback()
         finally:
             db.close()
-    
+
     return response
 
 # ── Real-Time WebSocket Manager ────────────────────────────────────────────────
@@ -536,21 +577,32 @@ def send_critical_email_alert(alert_data: dict):
     smtp_user = os.getenv("SMTP_USER")
     smtp_password = os.getenv("SMTP_PASSWORD")
     recipient = os.getenv("ALERT_RECIPIENT_EMAIL")
-    
+
     if not (smtp_server and smtp_port and smtp_user and smtp_password and recipient):
         print("SMTP settings incomplete. Skipping direct email alert dispatch.")
         return False
-        
+
     try:
         smtp_port = int(smtp_port)
         msg = MIMEMultipart()
         msg['From'] = smtp_user
         msg['To'] = recipient
+
         # Sanitize header values to prevent email header injection
         attack_type = alert_data.get('attack_type', 'Unknown').replace('\n', '').replace('\r', '')[:100]
         region = alert_data.get('region', 'Unknown').replace('\n', '').replace('\r', '')[:100]
         msg['Subject'] = f"🚨 [CRITICAL SOC ALERT] - {attack_type} Detected in {region}"
-        
+
+        # HTML-escape all dynamic values to prevent XSS/HTML injection in email clients
+        e = html.escape
+        e_id       = e(str(alert_data.get('id', alert_data.get('event_id', 'N/A'))))
+        e_attack   = e(str(alert_data.get('attack_type', 'Unknown')))
+        e_industry = e(str(alert_data.get('industry', 'Unknown')))
+        e_region   = e(str(alert_data.get('region', 'Unknown')))
+        e_score    = e(str(alert_data.get('threat_score', 'N/A')))
+        e_growth   = e(str(alert_data.get('growth_probability', 'N/A')))
+        e_ts       = e(str(alert_data.get('timestamp', 'N/A')))
+
         # HTML Email Body
         html_body = f"""
         <html>
@@ -562,37 +614,37 @@ def send_critical_email_alert(alert_data: dict):
                 <table style="width: 100%; border-collapse: collapse; margin: 20px 0; color: #cbd5e1;">
                     <tr>
                         <td style="padding: 8px 0; font-weight: bold; width: 180px;">Event ID:</td>
-                        <td style="padding: 8px 0; font-family: monospace; color: #38bdf8;">{alert_data.get('id', alert_data.get('event_id', 'N/A'))}</td>
+                        <td style="padding: 8px 0; font-family: monospace; color: #38bdf8;">{e_id}</td>
                     </tr>
                     <tr>
                         <td style="padding: 8px 0; font-weight: bold;">Attack Type:</td>
-                        <td style="padding: 8px 0; font-weight: bold; color: #ffffff;">{alert_data.get('attack_type')}</td>
+                        <td style="padding: 8px 0; font-weight: bold; color: #ffffff;">{e_attack}</td>
                     </tr>
                     <tr>
                         <td style="padding: 8px 0; font-weight: bold;">Target Sector:</td>
-                        <td style="padding: 8px 0;">{alert_data.get('industry')}</td>
+                        <td style="padding: 8px 0;">{e_industry}</td>
                     </tr>
                     <tr>
                         <td style="padding: 8px 0; font-weight: bold;">Target Region:</td>
-                        <td style="padding: 8px 0;">{alert_data.get('region')}</td>
+                        <td style="padding: 8px 0;">{e_region}</td>
                     </tr>
                     <tr>
                         <td style="padding: 8px 0; font-weight: bold;">ML Threat Score:</td>
-                        <td style="padding: 8px 0; font-weight: bold; color: #fb7185;">{alert_data.get('threat_score')}/100</td>
+                        <td style="padding: 8px 0; font-weight: bold; color: #fb7185;">{e_score}/100</td>
                     </tr>
                     <tr>
                         <td style="padding: 8px 0; font-weight: bold;">Growth Probability:</td>
-                        <td style="padding: 8px 0; color: #fbbf24;">{alert_data.get('growth_probability')}%</td>
+                        <td style="padding: 8px 0; color: #fbbf24;">{e_growth}%</td>
                     </tr>
                     <tr>
                         <td style="padding: 8px 0; font-weight: bold;">Timestamp:</td>
-                        <td style="padding: 8px 0;">{alert_data.get('timestamp')}</td>
+                        <td style="padding: 8px 0;">{e_ts}</td>
                     </tr>
                 </table>
                 <div style="background-color: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 15px; margin-top: 20px;">
                     <p style="margin: 0 0 10px 0; font-weight: bold; color: #38bdf8; text-transform: uppercase; font-size: 11px; letter-spacing: 1px;">Recommended Remediation Playbook:</p>
                     <ol style="margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.6;">
-                        <li>Isolate target endpoints in the {alert_data.get('industry')} subnet immediately.</li>
+                        <li>Isolate target endpoints in the {e_industry} subnet immediately.</li>
                         <li>Verify firewalls are blocking ingress traffic from flagged Splunk IP indicators.</li>
                         <li>Dispatch incident responders to execute backup verification protocols.</li>
                     </ol>
@@ -604,12 +656,13 @@ def send_critical_email_alert(alert_data: dict):
         </body>
         </html>
         """
-        
+
         msg.attach(MIMEText(html_body, 'html'))
-        
-        # Connect and Send
+
+        # Connect and Send with TLS certificate validation
+        context = ssl.create_default_context()
         server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
+        server.starttls(context=context)
         server.login(smtp_user, smtp_password)
         server.sendmail(smtp_user, recipient, msg.as_string())
         server.quit()
@@ -705,12 +758,21 @@ async def websocket_alerts_endpoint(websocket: WebSocket):
     
     await ws_manager.connect(websocket)
     try:
-        # Keep connection open and send initial history cache
+        # Send initial history cache
         await websocket.send_json({"type": "INITIAL_CACHE", "data": live_threats})
+        last_check = datetime.utcnow()
         while True:
+            # Re-verify authentication token every 5 minutes to detect expiry
+            # NOTE: This catches token expiry, not server-side revocation.
+            # Full revocation support requires checking a token blacklist in the DB.
+            if (datetime.utcnow() - last_check).total_seconds() > 300:
+                if not await verify_ws_token(websocket):
+                    await websocket.close(code=4001, reason="Token expired")
+                    return
+                last_check = datetime.utcnow()
             # Keep socket alive and receive client inputs if any
-            await websocket.receive_text()
-    except WebSocketDisconnect:
+            await asyncio.wait_for(websocket.receive_text(), timeout=30)
+    except (WebSocketDisconnect, asyncio.TimeoutError):
         ws_manager.disconnect(websocket)
     except Exception:
         ws_manager.disconnect(websocket)
@@ -734,6 +796,18 @@ def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
 
     access_token = create_access_token(data={"sub": user.username})
     refresh_token = create_refresh_token(data={"sub": user.username})
+
+    # Store refresh token hash in DB for rotation tracking
+    token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+    db_refresh = RefreshToken(
+        token_hash=token_hash,
+        user_id=user.id,
+        expires_at=datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+        revoked=False
+    )
+    db.add(db_refresh)
+    db.commit()
+
     return {
         "authenticated": True,
         "access_token": access_token,
@@ -750,30 +824,74 @@ class RefreshTokenRequest(BaseModel):
 @app.post("/api/auth/refresh")
 @limiter.limit("10/minute")
 def refresh_token(request: Request, req: RefreshTokenRequest, db: Session = Depends(get_db)):
-    """Exchange refresh token for new access token."""
-    try:
-        payload = jwt.decode(
-            req.refresh_token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM],
-            audience=JWT_AUDIENCE,
-            issuer=JWT_ISSUER
-        )
-        if payload.get("type") != "refresh":
-            raise HTTPException(status_code=401, detail="Invalid token type.")
-        username: str = payload.get("sub")
-        if not username:
-            raise HTTPException(status_code=401, detail="Invalid token payload.")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
+    """Exchange refresh token for new access token with rotation and key rotation support."""
+    # Try all available keys for validation
+    payload = None
+    last_error = None
+    for secret in _get_all_secrets():
+        try:
+            payload = jwt.decode(
+                req.refresh_token,
+                secret,
+                algorithms=[ALGORITHM],
+                audience=JWT_AUDIENCE,
+                issuer=JWT_ISSUER
+            )
+            break
+        except JWTError as e:
+            last_error = e
+            continue
+    if payload is None:
+        raise HTTPException(status_code=401, detail=f"Invalid or expired refresh token: {str(last_error)}")
+
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token type.")
+    username: str = payload.get("sub")
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid token payload.")
 
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found.")
 
-    # Create new access token (and optionally rotate refresh token)
+    # Database-backed refresh token rotation
+    token_hash = hashlib.sha256(req.refresh_token.encode()).hexdigest()
+    stored_token = db.query(RefreshToken).filter(
+        RefreshToken.token_hash == token_hash,
+        RefreshToken.user_id == user.id
+    ).first()
+
+    if not stored_token:
+        raise HTTPException(status_code=401, detail="Refresh token not found in database.")
+    if stored_token.revoked:
+        # Token was already used — revoke all tokens for this user (token reuse = theft)
+        db.query(RefreshToken).filter(
+            RefreshToken.user_id == user.id,
+            RefreshToken.revoked == False
+        ).update({"revoked": True})
+        db.commit()
+        raise HTTPException(status_code=401, detail="Refresh token has been revoked (possible token theft detected).")
+    if stored_token.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=401, detail="Refresh token has expired.")
+
+    # Revoke old token
+    stored_token.revoked = True
+    db.flush()
+
+    # Issue new tokens
     new_access_token = create_access_token(data={"sub": user.username})
-    new_refresh_token = create_refresh_token(data={"sub": user.username})  # Rotate refresh token
+    new_refresh_token = create_refresh_token(data={"sub": user.username})
+
+    # Store new refresh token hash
+    new_hash = hashlib.sha256(new_refresh_token.encode()).hexdigest()
+    db_new = RefreshToken(
+        token_hash=new_hash,
+        user_id=user.id,
+        expires_at=datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+        revoked=False
+    )
+    db.add(db_new)
+    db.commit()
 
     return {
         "access_token": new_access_token,
@@ -783,7 +901,8 @@ def refresh_token(request: Request, req: RefreshTokenRequest, db: Session = Depe
 
 # ── API Routes: CyberOracle Core Dashboard ────────────────────────────────────
 @app.get("/api/overview")
-def get_overview(source: str = "All", db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+@limiter.limit("10/minute")
+def get_overview(request: Request, source: str = "All", db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
         # Fetch India yearly counts using ORM (parameterized)
         india_counts = db.query(IndiaCase.year, func.count(IndiaCase.id).label("attack_count")).group_by(IndiaCase.year).all()
@@ -880,7 +999,8 @@ def get_overview(source: str = "All", db: Session = Depends(get_db), current_use
     }
 
 @app.get("/api/network")
-def get_network(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+@limiter.limit("10/minute")
+def get_network(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
         protocols = db.query(
             NetworkAttack.protocol.label("name"),
@@ -916,7 +1036,8 @@ def get_network(db: Session = Depends(get_db), current_user = Depends(get_curren
     }
 
 @app.get("/api/india")
-def get_india_hub(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+@limiter.limit("10/minute")
+def get_india_hub(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     try:
         state_rows = db.query(
             IndiaStateThreat.state,
@@ -945,7 +1066,8 @@ def get_india_hub(db: Session = Depends(get_db), current_user = Depends(get_curr
 
 
 @app.get("/api/tables")
-def get_tables(db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def get_tables(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     actors = db.query(ThreatActor).limit(50).all()
     cves = db.query(CveTable).limit(50).all()
     return {
@@ -1018,7 +1140,8 @@ class ClientCreate(BaseModel):
     description: str = ""
 
 @app.get("/api/clients")
-def list_clients(db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def list_clients(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     clients = db.query(Client).order_by(Client.created_at.desc()).all()
     return [{
         "id": c.id, "name": c.name, "description": c.description,
@@ -1027,7 +1150,8 @@ def list_clients(db: Session = Depends(get_db)):
     } for c in clients]
 
 @app.post("/api/clients")
-def create_client(req: ClientCreate, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def create_client(request: Request, req: ClientCreate, db: Session = Depends(get_db), current_user = Depends(require_role("operator"))):
     client = Client(name=req.name, description=req.description)
     db.add(client)
     db.commit()
@@ -1035,7 +1159,8 @@ def create_client(req: ClientCreate, db: Session = Depends(get_db)):
     return {"id": client.id, "name": client.name}
 
 @app.delete("/api/clients/{client_id}")
-def delete_client(client_id: int, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def delete_client(request: Request, client_id: int, db: Session = Depends(get_db), current_user = Depends(require_role("administrator"))):
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -1048,7 +1173,8 @@ class ScanCreate(BaseModel):
     target: str
 
 @app.get("/api/scans")
-def list_scans(client_id: int = None, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def list_scans(request: Request, client_id: int = None, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     q = db.query(Scan)
     if client_id:
         q = q.filter(Scan.client_id == client_id)
@@ -1063,7 +1189,7 @@ def list_scans(client_id: int = None, db: Session = Depends(get_db)):
 
 @app.post("/api/scans")
 @limiter.limit("5/minute")
-def start_scan(request: Request, req: ScanCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def start_scan(request: Request, req: ScanCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user = Depends(require_role("operator"))):
     client = db.query(Client).filter(Client.id == req.client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -1079,7 +1205,8 @@ def start_scan(request: Request, req: ScanCreate, background_tasks: BackgroundTa
     return {"scan_id": scan_id, "status": "pending", "message": "Scan queued in background."}
 
 @app.get("/api/scans/{scan_id}")
-def get_scan(scan_id: int, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def get_scan(request: Request, scan_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -1133,7 +1260,8 @@ Use professional, technical language. Be specific and actionable. Scan data: {co
     }
 
 @app.get("/api/scans/{scan_id}/report")
-def download_report(scan_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+@limiter.limit("5/minute")
+def download_report(request: Request, scan_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -1155,7 +1283,6 @@ def download_report(scan_id: int, background_tasks: BackgroundTasks, db: Session
     background_tasks.add_task(cleanup_temp_file, tmp.name)
 
     # Sanitize client name for filename (prevent path traversal)
-    import re
     safe_client_name = re.sub(r'[^a-zA-Z0-9_-]', '_', client.name) if client else "Unknown"
     safe_client_name = safe_client_name[:50]  # Limit length
     filename = f"CyberOracle_Report_{safe_client_name}_{scan_id}.pdf"
@@ -1167,11 +1294,13 @@ def download_report(scan_id: int, background_tasks: BackgroundTasks, db: Session
 
 # ── API Routes: Local Security Health Posture ─────────────────────────────────
 @app.get("/api/local-ip")
-def get_local_network_ip(current_user = Depends(get_current_user)):
+@limiter.limit("10/minute")
+def get_local_network_ip(request: Request, current_user = Depends(get_current_user)):
     return {"ip": get_local_ip()}
 
 @app.post("/api/system-scan")
-def run_system_scan(current_user = Depends(get_current_user)):
+@limiter.limit("2/minute")
+def run_system_scan(request: Request, current_user = Depends(require_role("administrator"))):
     report = full_system_scan()
     context = (
         f"Firewall Status: {report['firewall']['status']} (Secure: {report['firewall']['secure']}). "
@@ -1192,11 +1321,12 @@ Context: {context}"""
 
 # ── API Routes: AI Chat Analyst ───────────────────────────────────────────────
 class ChatRequest(BaseModel):
-    query: str
-    context: str = ""
+    query: str = Field(..., min_length=1, max_length=5000)
+    context: str = Field("", max_length=10000)
 
 @app.post("/api/chat")
-def chat_with_ai(req: ChatRequest, current_user = Depends(get_current_user)):
+@limiter.limit("5/minute")
+def chat_with_ai(request: Request, req: ChatRequest, current_user = Depends(get_current_user)):
     return StreamingResponse(analyze_threat_stream(req.query, req.context), media_type="text/event-stream")
 
 # ── API Routes: Machine Learning Predictions ──────────────────────────────────
@@ -1226,12 +1356,23 @@ class ThreatAnalysisRequest(BaseModel):
     growth_probability: float
     explainability: Dict[str, float]
 
+class N8nTriggerPayload(BaseModel):
+    """Validated payload for n8n SOAR workflow trigger."""
+    predicted_risk_level: Optional[str] = None
+    predicted_threat_score: Optional[float] = None
+    predicted_growth_probability: Optional[float] = None
+    recommended_actions: Optional[List[str]] = None
+    input: Optional[Dict[str, Any]] = None
+    model_config = {"extra": "ignore"}
+
 @app.get("/api/threats/live")
-def get_live_threats(current_user = Depends(get_current_user)):
+@limiter.limit("10/minute")
+def get_live_threats(request: Request, current_user = Depends(get_current_user)):
     return live_threats
 
 @app.get("/api/threats/history")
-def get_threat_history(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+@limiter.limit("10/minute")
+def get_threat_history(request: Request, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     alerts = db.query(SiemAlert).order_by(SiemAlert.timestamp.desc()).limit(100).all()
     return [{
         "attack_type": a.attack_type, "industry": a.industry, "region": a.region,
@@ -1319,13 +1460,20 @@ Explain the attack vector, machine learning features context, and outline a reco
     }
 
 @app.post("/api/threats/trigger-n8n")
-async def trigger_n8n_workflow(payload: Dict[str, Any]):
+@limiter.limit("5/minute")
+async def trigger_n8n_workflow(request: Request, payload: N8nTriggerPayload, current_user = Depends(require_role("administrator"))):
     webhook_url = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/threat-alert")
-    print(f"Triggering n8n webhook with payload: {payload}")
+    webhook_secret = os.getenv("N8N_WEBHOOK_SECRET", "")
+    print(f"Triggering n8n webhook for {current_user.username}")
     n8n_success = False
+
+    # Build n8n payload from validated model
+    n8n_payload = payload.model_dump(exclude_none=True)
+
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(webhook_url, json=payload, timeout=2.0)
+            headers = {"X-Webhook-Token": webhook_secret} if webhook_secret else {}
+            response = await client.post(webhook_url, json=n8n_payload, headers=headers, timeout=2.0)
             if response.status_code == 200:
                 n8n_success = True
                 return {
@@ -1339,14 +1487,14 @@ async def trigger_n8n_workflow(payload: Dict[str, Any]):
         
     # Fallback to direct SMTP dispatch if n8n is offline and threat is high/critical
     email_dispatched = False
-    if not n8n_success and payload.get("predicted_risk_level") in ["CRITICAL", "HIGH"]:
+    if not n8n_success and n8n_payload.get("predicted_risk_level") in ["CRITICAL", "HIGH"]:
         alert_dict = {
-            "id": payload.get("input", {}).get("id", "EV-SOAR-" + secrets.token_hex(4).upper()),
-            "attack_type": payload.get("input", {}).get("attack_type"),
-            "industry": payload.get("input", {}).get("industry"),
-            "region": payload.get("input", {}).get("region"),
-            "threat_score": payload.get("predicted_threat_score"),
-            "growth_probability": payload.get("predicted_growth_probability"),
+            "id": n8n_payload.get("input", {}).get("id", "EV-SOAR-" + secrets.token_hex(4).upper()),
+            "attack_type": n8n_payload.get("input", {}).get("attack_type"),
+            "industry": n8n_payload.get("input", {}).get("industry"),
+            "region": n8n_payload.get("input", {}).get("region"),
+            "threat_score": n8n_payload.get("predicted_threat_score"),
+            "growth_probability": n8n_payload.get("predicted_growth_probability"),
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         email_dispatched = send_critical_email_alert(alert_dict)
@@ -1355,9 +1503,9 @@ async def trigger_n8n_workflow(payload: Dict[str, Any]):
     return {
         "status": "success",
         "n8n_status": "simulated",
-        "message": f"Simulated execution. n8n workflow would route {payload.get('predicted_risk_level', 'UNKNOWN')} alert. Direct email dispatch: {'SUCCESS' if email_dispatched else 'SKIPPED/FAILED'}",
+        "message": f"Simulated execution. n8n workflow would route {n8n_payload.get('predicted_risk_level', 'UNKNOWN')} alert. Direct email dispatch: {'SUCCESS' if email_dispatched else 'SKIPPED/FAILED'}",
         "routing_simulation": {
-            "slack_channel": "#soc-alerts-critical" if payload.get("predicted_threat_score", 0) >= 50 else "#soc-alerts-low",
+            "slack_channel": "#soc-alerts-critical" if n8n_payload.get("predicted_threat_score", 0) >= 50 else "#soc-alerts-low",
             "email_dispatched_to": recipient,
             "workflow_execution_id": f"n8n-wf-{secrets.token_hex(6)}"
         }

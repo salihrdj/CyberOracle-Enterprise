@@ -52,7 +52,8 @@ def analyze_threat(query: str, context_data: str = "") -> str:
     elif AI_PROVIDER == "gemini":
         if not GEMINI_API_KEY:
             return "⚠️ GEMINI_API_KEY not configured. Set it in your .env file."
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+        headers = {"x-goog-api-key": GEMINI_API_KEY}
         payload = {
             "contents": [
                 {"role": "user", "parts": [{"text": f"System Guidelines: {system}\n\nUser Query: {query}"}]}
@@ -60,7 +61,7 @@ def analyze_threat(query: str, context_data: str = "") -> str:
             "generationConfig": {"temperature": 0.2}
         }
         try:
-            r = httpx.post(url, json=payload, timeout=30.0)
+            r = httpx.post(url, json=payload, headers=headers, timeout=30.0)
             if r.status_code == 200:
                 res_data = r.json()
                 return res_data['candidates'][0]['content']['parts'][0]['text']
@@ -133,7 +134,8 @@ def analyze_threat_stream(query: str, context_data: str = ""):
         if not GEMINI_API_KEY:
             yield "⚠️ GEMINI_API_KEY not configured in .env."
             return
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?key={GEMINI_API_KEY}"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent"
+        g_headers = {"x-goog-api-key": GEMINI_API_KEY}
         payload = {
             "contents": [
                 {"role": "user", "parts": [{"text": f"System Guidelines: {system}\n\nUser Query: {query}"}]}
@@ -141,7 +143,7 @@ def analyze_threat_stream(query: str, context_data: str = ""):
             "generationConfig": {"temperature": 0.2}
         }
         try:
-            with httpx.stream("POST", url, json=payload, timeout=30.0) as r:
+            with httpx.stream("POST", url, json=payload, headers=g_headers, timeout=30.0) as r:
                 if r.status_code != 200:
                     yield f"Error initiating Gemini stream (code {r.status_code})"
                     return

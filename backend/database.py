@@ -1,13 +1,25 @@
 import os
+import re
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/cyber_enterprise")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL environment variable must be set. "
+        "Example: postgresql://user:password@host:5432/dbname"
+    )
+
+# Enforce TLS for non-development environments
+if os.getenv("ENV", "development").lower() != "development" or os.getenv("DB_SSL_REQUIRE", "").lower() == "true":
+    if "sslmode" not in DATABASE_URL:
+        separator = "&" if "?" in DATABASE_URL else "?"
+        DATABASE_URL += f"{separator}sslmode=require"
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -169,6 +181,15 @@ class AuditLog(Base):
     user_agent = Column(String(500), nullable=True)
     details = Column(JSON, default=dict)
     status = Column(String(20), default="success")
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+    id = Column(Integer, primary_key=True, index=True)
+    token_hash = Column(String(255), unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    revoked = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 def init_db():
     Base.metadata.create_all(bind=engine)

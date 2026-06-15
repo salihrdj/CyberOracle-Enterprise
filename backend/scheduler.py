@@ -1,4 +1,6 @@
 import os
+import time
+import random
 import requests
 import json
 from datetime import datetime, timedelta
@@ -123,6 +125,7 @@ def fetch_latest_cves():
     results_per_page = 50
     max_pages = 5  # Limit to 250 CVEs per run
 
+    delay = 1.0  # Initial delay in seconds
     for page in range(max_pages):
         data = fetch_nvd_cves(start_index, results_per_page)
         if not data:
@@ -131,6 +134,11 @@ def fetch_latest_cves():
         cve_items = data.get("vulnerabilities", [])
         if not cve_items:
             break
+
+        # Exponential backoff with jitter between pages to avoid NVD rate limiting
+        if page < max_pages - 1:
+            time.sleep(delay + random.random() * 0.5)
+            delay = min(delay * 2, 30.0)
 
         for item in cve_items:
             cve_id = item.get("cve", {}).get("id")

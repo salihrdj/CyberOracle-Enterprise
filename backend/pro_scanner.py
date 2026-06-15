@@ -153,7 +153,7 @@ def scan_host(ip: str) -> Dict:
     """Full port scan + banner grab + CVE mapping for a single host."""
     open_ports = []
 
-    scan_concurrency = int(os.getenv("SCAN_CONCURRENCY", "100"))
+    scan_concurrency = min(int(os.getenv("SCAN_CONCURRENCY", "100")), 50)
     with concurrent.futures.ThreadPoolExecutor(max_workers=scan_concurrency) as executor:
         futures = {executor.submit(check_port, ip, port): port for port in FULL_PORTS}
         for future in concurrent.futures.as_completed(futures):
@@ -223,7 +223,7 @@ def discover_hosts(ips: List[str], progress_callback=None) -> List[str]:
             progress_callback(done, len(ips))
         return ip if alive else None
 
-    scan_concurrency = int(os.getenv("SCAN_CONCURRENCY", "100"))
+    scan_concurrency = min(int(os.getenv("SCAN_CONCURRENCY", "100")), 50)
     with concurrent.futures.ThreadPoolExecutor(max_workers=scan_concurrency) as executor:
         futures = [executor.submit(check, ip) for ip in ips]
         for f in concurrent.futures.as_completed(futures):

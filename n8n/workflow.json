@@ -5,7 +5,16 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "threat-alert",
-        "options": {}
+        "options": {},
+        "webhookAuth": [
+          {
+            "name": "headerAuth",
+            "properties": {
+              "name": "X-Webhook-Token",
+              "value": "={{$env.N8N_WEBHOOK_SECRET}}"
+            }
+          }
+        ]
       },
       "name": "Webhook Trigger",
       "type": "n8n-nodes-base.webhook",
