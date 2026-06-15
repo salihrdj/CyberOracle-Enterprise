@@ -1,0 +1,16 @@
+{
+  "name": "CyberOracle Enterprise",
+  "short_name": "CyberOracle",
+  "description": "Enterprise SOAR & Threat Intelligence Platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#04050e",
+  "theme_color": "#04050e",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

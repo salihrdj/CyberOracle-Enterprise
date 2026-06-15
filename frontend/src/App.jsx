@@ -5,7 +5,8 @@ import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import { 
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
-  Tooltip, ResponsiveContainer, Cell 
+  Tooltip, ResponsiveContainer, Cell, AreaChart, Area, ReferenceDot,
+  PieChart, Pie
 } from 'recharts';
 import { 
   ShieldAlert, Activity, Search, Zap, Globe, Database, LayoutDashboard, 
@@ -106,6 +107,16 @@ const GradientDefs = () => (
 );
 
 function App() {
+  const getX = (lon) => {
+    return 30.767 + ((lon + 180) / 360) * 784.077;
+  };
+  
+  const getY = (lat) => {
+    const latRad = (lat * Math.PI) / 180;
+    const merc = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
+    return 470.9 - 74.0 * merc;
+  };
+
   const [token, setToken] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('soc_token') || '';
@@ -143,6 +154,8 @@ function App() {
   // Global layouts & charts
   const [filter, setFilter] = useState('All');
   const [overview, setOverview] = useState(null);
+  const [mapArcs, setMapArcs] = useState([]);
+  const [mapPaths, setMapPaths] = useState([]);
   const [net, setNet] = useState(null);
   const [india, setIndia] = useState(null);
   const [tables, setTables] = useState(null);
@@ -213,6 +226,33 @@ function App() {
     }
   }, [page, filter, token]);
 
+  // Fetch and parse world-map.svg paths
+  useEffect(() => {
+    fetch('/world-map.svg')
+      .then(r => r.text())
+      .then(svgText => {
+        try {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(svgText, 'image/svg+xml');
+          const paths = Array.from(doc.querySelectorAll('path')).map(p => ({
+            id: p.getAttribute('id') || Math.random().toString(),
+            d: p.getAttribute('d')
+          }));
+          setMapPaths(paths);
+        } catch (err) {
+          console.error("Failed to parse map SVG:", err);
+        }
+      })
+      .catch(err => console.error("Failed to fetch map SVG:", err));
+  }, []);
+
+  // Sync mapArcs with overview data initially
+  useEffect(() => {
+    if (overview && overview.map_arcs) {
+      setMapArcs(overview.map_arcs);
+    }
+  }, [overview]);
+
   // Cleanup scan polling timer on unmount
   useEffect(() => {
     return () => {
@@ -222,7 +262,7 @@ function App() {
 
   // WebSocket Live Alert Stream Setup
   useEffect(() => {
-    if (!token || page !== 'siem') {
+    if (!token || (page !== 'siem' && page !== 'dashboard')) {
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -282,6 +322,26 @@ function App() {
           setLiveIncidents(prev => {
             const next = [msg.data, ...prev];
             return next.slice(0, 50);
+          });
+        }
+        if (msg.data.origin_latitude && msg.data.origin_longitude) {
+          const newArc = {
+            id: msg.data.id || ("arc-" + Date.now()),
+            origin: {
+              city: msg.data.origin_city || msg.data.region || "Threat Origin",
+              lat: msg.data.origin_latitude,
+              lon: msg.data.origin_longitude
+            },
+            target: {
+              city: msg.data.target_city || "Bangalore HQ",
+              lat: msg.data.target_latitude || 12.9716,
+              lon: msg.data.target_longitude || 77.5946
+            },
+            severity: msg.data.severity || 5
+          };
+          setMapArcs(prev => {
+            const next = [...prev, newArc];
+            return next.slice(-15);
           });
         }
       }
@@ -884,65 +944,536 @@ function App() {
 
           {/* 2. OVERVIEW DASHBOARD */}
           {page === 'dashboard' && (!overview ? <Loader /> : (
-            <div className="space-y-8">
-              {/* Metrics */}
-              <div className="grid grid-cols-4 gap-10 py-2">
-                <Metric label="Total Incidents" value={overview.metrics.totalIncidents?.toLocaleString()} color="#a78bfa" />
-                <Metric label="Financial Loss" value={`$${overview.metrics.financialLoss?.toLocaleString()}M`} delta={overview.metrics.lossDelta} color="#38bdf8" />
-                <Metric label="Affected Users" value={overview.metrics.affectedUsers?.toLocaleString()} delta={overview.metrics.usersDelta} color="#34d399" />
-                <Metric label="Threat Level" value={overview.metrics.financialLoss > 10000 ? 'Elevated' : 'Moderate'} color="#fb7185" />
-              </div>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+              
+              {/* LEFT SIDEBAR PANEL: Status Gauge & Incident Queue (lg:col-span-3) */}
+              <div className="lg:col-span-3 col-span-12 glass bg-[#080a18]/70 border border-white/5 p-5 flex flex-col justify-between relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-[1.5px] bg-gradient-to-r from-transparent via-sky/20 to-transparent"></div>
+                
+                {/* Section 1: Security Status */}
+                <div>
+                  <h3 className="text-xs font-semibold text-txt-dim mb-3 tracking-widest uppercase flex items-center gap-1.5 font-mono">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky animate-pulse"></span>
+                    Security Status
+                  </h3>
+                  
+                  {/* Gauge Dial SVG */}
+                  <div className="flex justify-center items-center py-1 relative">
+                    <svg viewBox="0 0 200 130" className="w-full max-w-[160px]">
+                      <defs>
+                        <linearGradient id="gauge-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stopColor="#38bdf8" />
+                          <stop offset="50%" stopColor="#fbbf24" />
+                          <stop offset="100%" stopColor="#fb7185" />
+                        </linearGradient>
+                        <radialGradient id="center-glow" cx="50%" cy="50%" r="50%">
+                          <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.18} />
+                          <stop offset="100%" stopColor="#38bdf8" stopOpacity={0} />
+                        </radialGradient>
+                        <filter id="gauge-glow" x="-20%" y="-20%" width="140%" height="140%">
+                          <feGaussianBlur stdDeviation="2.5" result="blur" />
+                          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                        </filter>
+                      </defs>
+                      
+                      <circle cx="100" cy="90" r="50" fill="url(#center-glow)" />
+                      <circle cx="100" cy="90" r="50" fill="none" stroke="rgba(56, 189, 248, 0.05)" strokeWidth="0.8" strokeDasharray="3, 4" />
+                      <circle cx="100" cy="90" r="35" fill="none" stroke="rgba(56, 189, 248, 0.03)" strokeWidth="0.8" />
+                      <circle cx="100" cy="90" r="20" fill="none" stroke="rgba(56, 189, 248, 0.02)" strokeWidth="0.8" />
 
-              {/* Charts */}
-              <div className="grid grid-cols-5 gap-6">
-                <div className="col-span-3 glass p-7">
-                  <h3 className="text-sm font-medium text-txt-dim mb-5">Attack Trends</h3>
-                  <div className="h-[300px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={overview.trends}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                        <XAxis dataKey="year" stroke="#475569" tick={{ fontSize: 11 }} />
-                        <YAxis stroke="#475569" tick={{ fontSize: 11 }} />
-                        <Tooltip contentStyle={TT} />
-                        <Line type="monotone" dataKey="attack_count" stroke="#a78bfa" strokeWidth={2.5} dot={{ r: 3, fill: '#050510', stroke: '#a78bfa', strokeWidth: 2 }} activeDot={{ r: 5, fill: '#a78bfa' }} />
-                      </LineChart>
-                    </ResponsiveContainer>
+                      <line
+                        x1="100"
+                        y1="90"
+                        x2="100"
+                        y2="15"
+                        stroke="rgba(56, 189, 248, 0.18)"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                      >
+                        <animateTransform
+                          attributeName="transform"
+                          type="rotate"
+                          from="-180 100 90"
+                          to="0 100 90"
+                          dur="5s"
+                          repeatCount="indefinite"
+                        />
+                      </line>
+
+                      <path
+                        d="M 30 90 A 70 70 0 0 1 170 90"
+                        fill="none"
+                        stroke="rgba(255,255,255,0.04)"
+                        strokeWidth="8"
+                        strokeLinecap="round"
+                      />
+                      
+                      {Array.from({ length: 11 }).map((_, i) => {
+                        const angle = -180 + i * 18;
+                        const rad = (angle * Math.PI) / 180;
+                        const r1 = 74;
+                        const r2 = 79;
+                        const tx1 = 100 + r1 * Math.cos(rad);
+                        const ty1 = 90 + r1 * Math.sin(rad);
+                        const tx2 = 100 + r2 * Math.cos(rad);
+                        const ty2 = 90 + r2 * Math.sin(rad);
+                        return (
+                          <line
+                            key={i}
+                            x1={tx1}
+                            y1={ty1}
+                            x2={tx2}
+                            y2={ty2}
+                            stroke={i % 5 === 0 ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.12)"}
+                            strokeWidth={i % 5 === 0 ? 1.5 : 0.8}
+                          />
+                        );
+                      })}
+
+                      <path
+                        d="M 30 90 A 70 70 0 0 1 170 90"
+                        fill="none"
+                        stroke="url(#gauge-grad)"
+                        strokeWidth="8"
+                        strokeLinecap="round"
+                        strokeDasharray="219.9"
+                        strokeDashoffset={219.9 - ((overview.threat_score || 65) / 100) * 219.9}
+                        style={{ transition: 'stroke-dashoffset 0.8s ease-out' }}
+                      />
+                      
+                      <line
+                        x1="100"
+                        y1="90"
+                        x2="100"
+                        y2="30"
+                        stroke="#f8fafc"
+                        strokeWidth="3.5"
+                        strokeLinecap="round"
+                        filter="url(#gauge-glow)"
+                        style={{
+                          transform: `rotate(${-90 + ((overview.threat_score || 65) / 100) * 180}deg)`,
+                          transformOrigin: '100px 90px',
+                          transition: 'transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1)'
+                        }}
+                      />
+                      
+                      <circle cx="100" cy="90" r="6.5" fill="#f8fafc" />
+                      <circle cx="100" cy="90" r="2.5" fill="#050510" />
+                      
+                      <text x="100" y="112" textAnchor="middle" fill="#f8fafc" className="font-mono text-2xl font-bold">
+                        {overview.threat_score || 65}
+                      </text>
+                      <text x="100" y="122" textAnchor="middle" fill="#94a3b8" className="text-[8px] uppercase tracking-widest font-semibold font-mono">
+                        Threat Index
+                      </text>
+                    </svg>
                   </div>
-                </div>
-                <div className="col-span-2 glass p-7">
-                  <h3 className="text-sm font-medium text-txt-dim mb-5">Severity Breakdown</h3>
-                  <div className="flex flex-wrap justify-center gap-6 py-6">
-                    {[{ l: 'Critical', p: 15, c: '#fb7185' }, { l: 'High', p: 55, c: '#fbbf24' }, { l: 'Medium', p: 65, c: '#38bdf8' }, { l: 'Low', p: 85, c: '#34d399' }].map(s => (
-                      <div key={s.l} className="flex flex-col items-center gap-2">
-                        <Ring pct={s.p} color={s.c} />
-                        <span className="text-[11px] text-txt-dim">{s.l}</span>
+
+                  {/* Segmented Threat Level Bar */}
+                  <div className="mt-2 px-1">
+                    <div className="flex justify-between text-[8px] text-txt-dim uppercase tracking-wider mb-1 font-mono">
+                      <span className={(overview.threat_score || 65) < 25 ? "text-mint font-bold" : ""}>Low</span>
+                      <span className={(overview.threat_score || 65) >= 25 && (overview.threat_score || 65) < 50 ? "text-amber font-bold" : ""}>Medium</span>
+                      <span className={(overview.threat_score || 65) >= 50 && (overview.threat_score || 65) < 75 ? "text-orange-500 font-bold" : ""}>High</span>
+                      <span className={(overview.threat_score || 65) >= 75 ? "text-rose font-bold" : ""}>Critical</span>
+                    </div>
+                    <div className="h-1.5 w-full bg-[rgba(255,255,255,0.02)] rounded-full overflow-hidden flex p-[1px] gap-[2px] border border-white/5">
+                      <div className={`h-full flex-1 rounded-l-full ${(overview.threat_score || 65) < 25 ? 'bg-mint shadow-[0_0_8px_#34d399]' : 'bg-mint/10'}`}></div>
+                      <div className={`h-full flex-1 ${(overview.threat_score || 65) >= 25 && (overview.threat_score || 65) < 50 ? 'bg-amber shadow-[0_0_8px_#fbbf24]' : 'bg-amber/10'}`}></div>
+                      <div className={`h-full flex-1 ${(overview.threat_score || 65) >= 50 && (overview.threat_score || 65) < 75 ? 'bg-orange-500 shadow-[0_0_8px_#f97316]' : 'bg-orange-500/10'}`}></div>
+                      <div className={`h-full flex-1 rounded-r-full ${(overview.threat_score || 65) >= 75 ? 'bg-rose shadow-[0_0_8px_#fb7185]' : 'bg-rose/10'}`}></div>
+                    </div>
+                  </div>
+
+                  {/* Status Metrics Under Gauge */}
+                  <div className="grid grid-cols-3 gap-1 pt-4 border-t border-glass-border mt-3 text-center text-xs">
+                    <div>
+                      <div className="text-[10px] text-txt-dim uppercase tracking-wider font-mono">Active</div>
+                      <div className="font-mono font-bold text-sm text-amber mt-0.5">
+                        {overview.threat_metrics?.active_threats || 0}
                       </div>
-                    ))}
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-txt-dim uppercase tracking-wider font-mono">Vulns</div>
+                      <div className="font-mono font-bold text-sm text-rose mt-0.5">
+                        {overview.threat_metrics?.critical_vulns || 0}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-txt-dim uppercase tracking-wider font-mono">Trend</div>
+                      <div className={`font-mono font-bold text-sm mt-0.5 ${(overview.threat_metrics?.trend_24h || 0) >= 0 ? 'text-rose' : 'text-mint'}`}>
+                        {(overview.threat_metrics?.trend_24h || 0) >= 0 ? `+${overview.threat_metrics?.trend_24h}%` : `${overview.threat_metrics?.trend_24h}%`}
+                      </div>
+                    </div>
                   </div>
                 </div>
+
+                <div className="border-t border-glass-border/30 my-4"></div>
+
+                {/* Section 2: Incident Workflow */}
+                <div className="flex-1 flex flex-col justify-between min-h-[200px]">
+                  <div>
+                    <h3 className="text-xs font-semibold text-txt-dim mb-3 tracking-widest uppercase flex items-center gap-1.5 font-mono">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber animate-pulse"></span>
+                      Incident Workflow
+                    </h3>
+                    <div className="space-y-2.5 max-h-[220px] overflow-y-auto pr-1">
+                      {(overview.incidents || []).map((inc, i) => {
+                        const statusColors = {
+                          "Active": "border-l-4 border-rose bg-rose/5",
+                          "Investigating": "border-l-4 border-amber bg-amber/5",
+                          "Resolved": "border-l-4 border-mint bg-mint/5"
+                        };
+                        const badgeColors = {
+                          "Active": "bg-rose/10 text-rose border-rose/20",
+                          "Investigating": "bg-amber/10 text-amber border-amber/20",
+                          "Resolved": "bg-mint/10 text-mint border-mint/20"
+                        };
+                        return (
+                          <div key={inc.id || i} className={`p-2.5 rounded-lg border border-white/5 flex flex-col gap-1.5 transition-all duration-200 hover:translate-x-1 hover:bg-white/[0.04] hover:shadow-[0_0_12px_rgba(255,255,255,0.02)] ${statusColors[inc.status] || 'border-l-4 border-slate-500 bg-slate-500/5'}`}>
+                            <div className="flex justify-between items-start">
+                              <span className="text-[10px] font-bold text-txt flex items-center gap-1 truncate">
+                                {inc.status === 'Active' && <span className="w-1.5 h-1.5 rounded-full bg-rose animate-ping shrink-0"></span>}
+                                {inc.status === 'Investigating' && <span className="w-1.5 h-1.5 rounded-full bg-amber animate-pulse shrink-0"></span>}
+                                {inc.status === 'Resolved' && <span className="w-1.5 h-1.5 rounded-full bg-mint shrink-0"></span>}
+                                <span className="truncate">{inc.title}</span>
+                              </span>
+                              <span className={`text-[7px] font-bold px-1 py-0.5 rounded border uppercase font-mono shrink-0 ${badgeColors[inc.status] || 'bg-slate-500/10 text-slate-400 border-slate-500/20'}`}>
+                                {inc.status}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center text-[8px] text-txt-dim font-mono">
+                              <span>Ops: {inc.assigned_to}</span>
+                              <span>{inc.time}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {(!overview.incidents || overview.incidents.length === 0) && (
+                        <div className="text-txt-faint text-xs text-center py-8">No active incidents in queue</div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="border-t border-glass-border/30 pt-3 mt-3 flex justify-between items-center text-[9px] text-txt-dim">
+                    <span className="font-mono">Active Queue</span>
+                    <span className="font-mono text-txt font-semibold">{(overview.incidents || []).filter(i => i.status !== 'Resolved').length} alerts</span>
+                  </div>
+                </div>
+
               </div>
 
-              {overview.impact?.length > 0 && (
-                <div className="glass p-7">
-                  <h3 className="text-sm font-medium text-txt-dim mb-5">Financial Impact Timeline</h3>
-                  <div className="h-[220px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={overview.impact} barCategoryGap="20%">
-                        <GradientDefs />
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
-                        <XAxis dataKey="year" stroke="#475569" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <YAxis stroke="#475569" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-                        <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(56,189,248,0.06)', radius: 8 }} />
-                        <Bar dataKey="financial_loss_in_million_" fill="#38bdf8" radius={[8, 8, 0, 0]} name="Loss ($M)" />
-                      </BarChart>
-                    </ResponsiveContainer>
+              {/* RIGHT MAIN PANEL: Map & Analytics (lg:col-span-9) */}
+              <div className="lg:col-span-9 col-span-12 flex flex-col gap-6">
+                
+                {/* Live Threat Map */}
+                <div className="glass p-5 flex flex-col justify-between min-h-[350px] relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-[1.5px] bg-gradient-to-r from-transparent via-rose/20 to-transparent"></div>
+                  <div className="flex justify-between items-center mb-3">
+                    <h3 className="text-sm font-semibold text-txt-dim tracking-wider uppercase flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose animate-pulse"></span>
+                      Live Threat Map
+                    </h3>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="w-2 h-2 rounded-full bg-rose animate-ping"></span>
+                      <span className="text-txt-dim font-mono">SOC Real-Time Stream</span>
+                    </div>
+                  </div>
+
+                  {/* World Map & Feed Container */}
+                  <div className="flex-1 bg-[rgba(5,5,20,0.45)] border border-[rgba(255,255,255,0.03)] rounded-lg overflow-hidden flex flex-col lg:flex-row items-stretch min-h-[240px]">
+                    
+                    {/* SVG Map Area (flex-1) */}
+                    <div className="flex-1 flex justify-center items-center relative min-h-[200px] p-2">
+                      {mapPaths.length === 0 ? (
+                        <div className="text-txt-faint font-mono text-xs animate-pulse">Initializing global vector projection...</div>
+                      ) : (
+                        <svg viewBox="30.767 241.591 784.077 458.627" className="w-full h-full max-h-[320px] p-2">
+                          {/* Geographic Latitude/Longitude Gridlines */}
+                          <g stroke="rgba(255, 255, 255, 0.02)" strokeWidth="0.5" strokeDasharray="3, 6">
+                            {[-40, -20, 0, 20, 40].map(lat => (
+                              <line key={`lat-${lat}`} x1="30.767" y1={getY(lat)} x2="814.844" y2={getY(lat)} />
+                            ))}
+                            {[-120, -60, 0, 60, 120].map(lon => (
+                              <line key={`lon-${lon}`} x1={getX(lon)} y1="241.591" x2={getX(lon)} y2="700.218" />
+                            ))}
+                          </g>
+
+                          {/* Central Target Crosshair */}
+                          {(() => {
+                            const cx = getX(0);
+                            const cy = getY(0);
+                            return (
+                              <g stroke="rgba(56, 189, 248, 0.1)" strokeWidth="0.8">
+                                <circle cx={cx} cy={cy} r="18" fill="none" strokeDasharray="2, 4" />
+                                <line x1={cx - 25} y1={cy} x2={cx + 25} y2={cy} />
+                                <line x1={cx} y1={cy - 25} x2={cx} y2={cy + 25} />
+                              </g>
+                            );
+                          })()}
+
+                          {/* Map Landmass Outlines */}
+                          <g fill="rgba(255, 255, 255, 0.03)" stroke="rgba(255, 255, 255, 0.08)" strokeWidth="0.5">
+                            {mapPaths.map(p => (
+                              <path key={p.id} d={p.d} id={`map-country-${p.id}`} className="hover:fill-[rgba(255,255,255,0.06)] transition-colors" />
+                            ))}
+                          </g>
+
+                          {/* Map Arcs & Points */}
+                          {mapArcs.map((arc, idx) => {
+                            const x1 = getX(arc.origin.lon);
+                            const y1 = getY(arc.origin.lat);
+                            const x2 = getX(arc.target.lon);
+                            const y2 = getY(arc.target.lat);
+                            
+                            if (isNaN(x1) || isNaN(y1) || isNaN(x2) || isNaN(y2)) return null;
+
+                            const midX = (x1 + x2) / 2;
+                            const midY = (y1 + y2) / 2;
+                            const dx = x2 - x1;
+                            const dy = y2 - y1;
+                            const dist = Math.sqrt(dx*dx + dy*dy);
+                            const ctrlX = midX;
+                            
+                            const curveVariance = 0.14 + (idx % 4) * 0.06;
+                            const ctrlY = midY - dist * curveVariance;
+
+                            const motionId = `motion-${arc.id}`;
+
+                            return (
+                              <g key={arc.id}>
+                                {/* Static & Pulsing Attacker Origin Pin */}
+                                <circle cx={x1} cy={y1} r="2.5" fill="#fb7185" />
+                                <circle cx={x1} cy={y1} r="2.5" fill="none" stroke="#fb7185" strokeWidth="1">
+                                  <animate attributeName="r" from="2.5" to="10" dur="1.8s" repeatCount="indefinite" />
+                                  <animate attributeName="opacity" from="1" to="0" dur="1.8s" repeatCount="indefinite" />
+                                </circle>
+
+                                {/* Static & Pulsing Corporate Target Pin */}
+                                <circle cx={x2} cy={y2} r="3" fill="#38bdf8" />
+                                <circle cx={x2} cy={y2} r="3" fill="none" stroke="#38bdf8" strokeWidth="1.5">
+                                  <animate attributeName="r" from="3" to="8" dur="2s" repeatCount="indefinite" />
+                                  <animate attributeName="opacity" from="0.8" to="0" dur="2s" repeatCount="indefinite" />
+                                </circle>
+
+                                {/* Background arc curve */}
+                                <path
+                                  d={`M ${x1} ${y1} Q ${ctrlX} ${ctrlY} ${x2} ${y2}`}
+                                  fill="none"
+                                  stroke="rgba(56, 189, 248, 0.08)"
+                                  strokeWidth="1"
+                                />
+
+                                {/* Animated dash flow */}
+                                <path
+                                  id={motionId}
+                                  d={`M ${x1} ${y1} Q ${ctrlX} ${ctrlY} ${x2} ${y2}`}
+                                  fill="none"
+                                  stroke={arc.severity >= 8 ? "rgba(251, 113, 133, 0.4)" : "rgba(56, 189, 248, 0.4)"}
+                                  strokeWidth="1.5"
+                                  strokeDasharray="6, 18"
+                                >
+                                  <animate attributeName="stroke-dashoffset" from="100" to="0" dur="2.5s" repeatCount="indefinite" />
+                                </path>
+
+                                {/* Animated Packet Traveler Dot traveling along path */}
+                                <circle r="2" fill={arc.severity >= 8 ? "#fb7185" : "#38bdf8"}>
+                                  <animateMotion
+                                    dur="2.5s"
+                                    repeatCount="indefinite"
+                                    path={`M ${x1} ${y1} Q ${ctrlX} ${ctrlY} ${x2} ${y2}`}
+                                  />
+                                </circle>
+                              </g>
+                            );
+                          })}
+                        </svg>
+                      )}
+                    </div>
+
+                    {/* Tactical Attack Stream Sidebar Feed (lg:w-[280px]) */}
+                    <div className="w-full lg:w-[280px] border-t lg:border-t-0 lg:border-l border-glass-border/30 bg-[rgba(5,5,15,0.4)] p-4 font-mono text-[9px] flex flex-col justify-between text-left">
+                      <div>
+                        <div className="text-[10px] font-bold text-sky mb-2 border-b border-glass-border pb-1.5 flex justify-between">
+                          <span>TACTICAL ATTACK STREAM</span>
+                          <span className="animate-pulse text-rose font-bold">● LIVE</span>
+                        </div>
+                        <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                          {liveIncidents.slice(0, 5).map((inc, i) => {
+                            const alertColor = inc.severity >= 8 ? 'text-rose' : (inc.severity >= 5 ? 'text-amber' : 'text-sky');
+                            return (
+                              <div key={inc.id || i} className="text-txt-dim flex items-start gap-1 leading-normal border-b border-white/[0.02] pb-1.5 font-mono">
+                                <span className={`${alertColor} shrink-0 font-bold`}>⚡</span>
+                                <div className="truncate">
+                                  <span className={`text-txt font-semibold ${alertColor}`}>{inc.attack_type}</span> from <span className="text-txt font-semibold">{inc.origin_city || inc.region}</span> to <span className="text-sky font-semibold">{inc.target_city || "Bangalore HQ"}</span>
+                                  <div className="text-[7px] text-txt-faint mt-0.5">{inc.id} • {inc.timestamp}</div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {liveIncidents.length === 0 && (
+                            <div className="text-txt-faint animate-pulse py-2 text-center">Awaiting incoming telemetry streams...</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* Map Telemetry Stats Row */}
+                  <div className="grid grid-cols-3 gap-2 border-t border-glass-border pt-4 mt-3 text-center text-xs">
+                    <div>
+                      <span className="text-[10px] text-txt-dim block uppercase tracking-wider font-mono">Top Origin</span>
+                      <span className="font-bold text-txt text-rose mt-0.5 block truncate">{overview.map_stats?.top_origin || "Moscow, RU"}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-txt-dim block uppercase tracking-wider font-mono">Top Target</span>
+                      <span className="font-bold text-txt text-sky mt-0.5 block truncate">{overview.map_stats?.top_target || "Bangalore HQ"}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-txt-dim block uppercase tracking-wider font-mono">Event Rate</span>
+                      <span className="font-bold font-mono text-txt text-mint mt-0.5 block truncate">{overview.map_stats?.active_rate || "1.24"} ev/s</span>
+                    </div>
                   </div>
                 </div>
-              )}
-            </div>
-          ))}
 
-          {/* 3. CLIENT MANAGEMENT & SCANS */}
+                {/* BOTTOM ROW: Network Throughput & Endpoint Health (lg:col-span-12) */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+                  
+                  {/* Network Throughput Area Chart (lg:col-span-8) */}
+                  <div className="lg:col-span-8 col-span-12 glass p-5 flex flex-col justify-between min-h-[290px] relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-[1.5px] bg-gradient-to-r from-transparent via-mint/20 to-transparent"></div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-txt-dim mb-3 tracking-wider uppercase flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-mint animate-pulse"></span>
+                        Network Throughput
+                      </h3>
+                      <div className="h-[180px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={overview.traffic?.data || []}>
+                            <defs>
+                              <linearGradient id="colorThroughput" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.35}/>
+                                <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
+                              </linearGradient>
+                              <linearGradient id="colorBlocked" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#fb7185" stopOpacity={0.18}/>
+                                <stop offset="95%" stopColor="#fb7185" stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.02)" />
+                            <XAxis dataKey="time" stroke="#475569" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                            <YAxis stroke="#475569" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                            <Tooltip contentStyle={TT} />
+                            <Area type="monotone" dataKey="throughput" name="Throughput (Gb/s)" stroke="#38bdf8" strokeWidth={2.5} fillOpacity={1} fill="url(#colorThroughput)" />
+                            <Area type="monotone" dataKey="blocked" name="Blocked Attacks" stroke="#fb7185" strokeWidth={1} fillOpacity={1} fill="url(#colorBlocked)" />
+                            
+                            {overview.traffic?.data && overview.traffic.data[8] && (
+                              <ReferenceDot
+                                x={overview.traffic.data[8].time}
+                                y={overview.traffic.data[8].throughput}
+                                r={5.5}
+                                fill="#fb7185"
+                                stroke="#050510"
+                                strokeWidth={2}
+                                className="animate-ping"
+                              />
+                            )}
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 border-t border-glass-border pt-3 mt-3 text-center text-xs">
+                      <div>
+                        <span className="text-[10px] text-txt-dim block uppercase tracking-wider font-mono">Avg Traffic</span>
+                        <span className="font-bold font-mono text-txt text-sky mt-0.5 block">{overview.traffic?.avg_throughput || 0} Gb/s</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-txt-dim block uppercase tracking-wider font-mono">Blocked IPs</span>
+                        <span className="font-bold font-mono text-txt text-rose mt-0.5 block">{overview.traffic?.total_blocked || 0}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Endpoint Health Donut Chart (lg:col-span-4) */}
+                  <div className="lg:col-span-4 col-span-12 glass p-5 flex flex-col justify-between min-h-[290px] relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-[1.5px] bg-gradient-to-r from-transparent via-lavender/20 to-transparent"></div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-txt-dim mb-3 tracking-wider uppercase flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-lavender animate-pulse"></span>
+                        Endpoint Health
+                      </h3>
+                      <div className="h-[150px] flex justify-center items-center relative">
+                        
+                        {/* Holographic scanner rings */}
+                        <div className="absolute w-[122px] h-[122px] rounded-full border border-sky/15 border-dashed animate-spin-slow pointer-events-none" style={{ animationDuration: '25s' }}></div>
+                        <div className="absolute w-[132px] h-[132px] rounded-full border border-lavender/10 border-dashed animate-spin-slow pointer-events-none" style={{ animationDuration: '45s', animationDirection: 'reverse' }}></div>
+
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={[
+                                { name: 'Secure', value: overview.endpoints?.secure || 280, color: '#34d399' },
+                                { name: 'Warning', value: overview.endpoints?.warning || 40, color: '#fbbf24' },
+                                { name: 'Compromised', value: overview.endpoints?.compromised || 20, color: '#fb7185' }
+                              ]}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={42}
+                              outerRadius={58}
+                              paddingAngle={3}
+                              dataKey="value"
+                            >
+                              {[
+                                { name: 'Secure', value: overview.endpoints?.secure || 280, color: '#34d399' },
+                                { name: 'Warning', value: overview.endpoints?.warning || 40, color: '#fbbf24' },
+                                { name: 'Compromised', value: overview.endpoints?.compromised || 20, color: '#fb7185' }
+                              ].map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="absolute flex flex-col items-center justify-center">
+                          <span className="text-lg font-bold font-mono text-white">
+                            {((overview.endpoints?.secure || 280) / ((overview.endpoints?.secure || 280) + (overview.endpoints?.warning || 40) + (overview.endpoints?.compromised || 20)) * 100).toFixed(0)}%
+                          </span>
+                          <span className="text-[7px] uppercase tracking-widest text-txt-dim font-semibold font-mono">Secure</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Legend */}
+                    <div className="border-t border-glass-border pt-3 mt-3 space-y-1 text-xs">
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-mint"></span>
+                          <span className="text-txt-dim text-[10px] font-mono">Secure</span>
+                        </div>
+                        <span className="font-mono font-bold text-txt text-[10px]">{overview.endpoints?.secure || 280}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber"></span>
+                          <span className="text-txt-dim text-[10px] font-mono">Warning</span>
+                        </div>
+                        <span className="font-mono font-bold text-txt text-[10px]">{overview.endpoints?.warning || 40}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose"></span>
+                          <span className="text-txt-dim text-[10px] font-mono">Compromised</span>
+                        </div>
+                        <span className="font-mono font-bold text-txt text-[10px]">{overview.endpoints?.compromised || 20}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+              </div>
+
+            </div>
+          ))}{/* 3. CLIENT MANAGEMENT & SCANS */}
           {page === 'clients' && !scanWizard && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">

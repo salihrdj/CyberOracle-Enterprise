@@ -435,6 +435,46 @@ class ConnectionManager:
 
 ws_manager = ConnectionManager()
 
+# Geocoding helpers for dashboard visual upgrade
+def get_region_coordinates(region: str) -> dict:
+    import random
+    region_coords = {
+        'North America': [
+            {"city": "New York", "lat": 40.7128, "lon": -74.0060},
+            {"city": "Chicago", "lat": 41.8781, "lon": -87.6298},
+            {"city": "San Francisco", "lat": 37.7749, "lon": -122.4194}
+        ],
+        'Europe': [
+            {"city": "London", "lat": 51.5074, "lon": -0.1278},
+            {"city": "Frankfurt", "lat": 50.1109, "lon": 8.6821},
+            {"city": "Moscow", "lat": 55.7558, "lon": 37.6173}
+        ],
+        'Asia-Pacific': [
+            {"city": "Beijing", "lat": 39.9042, "lon": 116.4074},
+            {"city": "Tokyo", "lat": 35.6762, "lon": 139.6503},
+            {"city": "Sydney", "lat": -33.8688, "lon": 151.2093}
+        ],
+        'Latin America': [
+            {"city": "Sao Paulo", "lat": -23.5505, "lon": -46.6333},
+            {"city": "Mexico City", "lat": 19.4326, "lon": -99.1332}
+        ],
+        'Middle East': [
+            {"city": "Dubai", "lat": 25.2048, "lon": 55.2708},
+            {"city": "Riyadh", "lat": 24.7136, "lon": 46.6753}
+        ]
+    }
+    coords = region_coords.get(region, [{"city": "Unknown", "lat": 0.0, "lon": 0.0}])
+    return random.choice(coords)
+
+def get_target_coordinates() -> dict:
+    import random
+    targets = [
+        {"city": "Bangalore HQ", "lat": 12.9716, "lon": 77.5946},
+        {"city": "New York Office", "lat": 40.7128, "lon": -74.0060},
+        {"city": "London Office", "lat": 51.5074, "lon": -0.1278}
+    ]
+    return random.choice(targets)
+
 # ── Ingest Simulation Background Thread ───────────────────────────────────────
 live_threats: List[Dict[str, Any]] = []
 simulation_active = True
@@ -471,11 +511,22 @@ async def simulate_soc_alerts_loop():
         elif threat_score >= 50: risk_level = "HIGH"
         elif threat_score >= 25: risk_level = "MEDIUM"
         
+        orig_info = get_region_coordinates(region)
+        targ_info = get_target_coordinates()
+
         # Enrichment payloads
         from main import SplunkSimulator, VirusTotalSimulator
         splunk_data = SplunkSimulator.query_logs(attack, region)
         vt_data = VirusTotalSimulator.scan_indicators(attack)
         
+        # Enrich splunk logs with coordinates for DB persistence & WebSockets
+        splunk_data["origin_city"] = orig_info["city"]
+        splunk_data["origin_latitude"] = orig_info["lat"]
+        splunk_data["origin_longitude"] = orig_info["lon"]
+        splunk_data["target_city"] = targ_info["city"]
+        splunk_data["target_latitude"] = targ_info["lat"]
+        splunk_data["target_longitude"] = targ_info["lon"]
+
         event = {
             "id": f"EV-{secrets.token_hex(4).upper()}",
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -487,6 +538,12 @@ async def simulate_soc_alerts_loop():
             "growth_probability": round(growth_prob * 100, 1),
             "risk_level": risk_level,
             "explainability": explainability,
+            "origin_city": orig_info["city"],
+            "origin_latitude": orig_info["lat"],
+            "origin_longitude": orig_info["lon"],
+            "target_city": targ_info["city"],
+            "target_latitude": targ_info["lat"],
+            "target_longitude": targ_info["lon"],
             "enrichment": {
                 "splunk": splunk_data,
                 "virustotal": vt_data
@@ -1005,6 +1062,174 @@ def get_overview(request: Request, source: str = "All", db: Session = Depends(ge
 
     impact_data = [{"year": row["year"], "financial_loss_in_million_": row["financial_loss_in_million_"]} for row in agg_metrics]
 
+    # Calculate extra SIEM HUD metrics
+    try:
+        from datetime import datetime, timedelta
+        import random
+        now_utc = datetime.utcnow()
+        last_24h = now_utc - timedelta(hours=24)
+        prev_24h = now_utc - timedelta(hours=48)
+
+        active_threats = db.query(SiemAlert).filter(SiemAlert.timestamp >= last_24h).count()
+        if active_threats == 0:
+            active_threats = max(8, db.query(SiemAlert).count())
+            
+        critical_alerts_count = db.query(SiemAlert).filter(SiemAlert.risk_level == 'CRITICAL').count()
+
+        prev_active_threats = db.query(SiemAlert).filter(SiemAlert.timestamp >= prev_24h, SiemAlert.timestamp < last_24h).count()
+        if prev_active_threats > 0:
+            trend_24h = round(((active_threats - prev_active_threats) / prev_active_threats) * 100, 1)
+        else:
+            trend_24h = 4.8
+
+        critical_vulns = db.query(OpenPort).filter(OpenPort.severity.in_(['High', 'Critical'])).count()
+        if critical_vulns == 0:
+            critical_vulns = 14
+
+        active_scans = db.query(Scan).filter(Scan.status == 'running').count()
+        threat_score = min(95, max(12, int(45 + (critical_alerts_count % 20) + (critical_vulns * 1.2) + (active_scans * 10))))
+    except Exception as e:
+        print(f"Error calculating threat metrics: {e}")
+        active_threats = 24
+        critical_vulns = 14
+        trend_24h = 4.8
+        threat_score = 65
+
+    # Endpoints
+    total_endpoints = 340
+    secure_endpoints = int(total_endpoints * 0.82)
+    warning_endpoints = int(total_endpoints * 0.12)
+    compromised_endpoints = total_endpoints - secure_endpoints - warning_endpoints
+
+    # Traffic
+    traffic_data = []
+    for i in range(12):
+        hour_label = f"{(12-i)}h ago" if i < 11 else "Just now"
+        throughput = round(15.0 + (i % 3) * 2.5 + random.uniform(-1.5, 1.5), 1)
+        blocked = int(100 + (i % 4) * 80 + random.randint(-20, 20))
+        if i == 8:
+            throughput = 42.5
+            blocked = 850
+        traffic_data.append({"time": hour_label, "throughput": throughput, "blocked": blocked})
+        
+    avg_throughput = round(sum(d["throughput"] for d in traffic_data) / len(traffic_data), 1)
+    total_blocked_ips = db.query(MaliciousIp).count() * 7 + (active_threats % 150)
+
+    # Map Arcs
+    map_arcs = []
+    try:
+        recent_alerts = db.query(SiemAlert).order_by(SiemAlert.timestamp.desc()).limit(15).all()
+        for alert in recent_alerts:
+            logs = alert.splunk_logs or {}
+            if "origin_latitude" in logs:
+                origin = {
+                    "city": logs.get("origin_city", alert.region),
+                    "lat": logs.get("origin_latitude"),
+                    "lon": logs.get("origin_longitude")
+                }
+                target = {
+                    "city": logs.get("target_city", "Bangalore HQ"),
+                    "lat": logs.get("target_latitude", 12.9716),
+                    "lon": logs.get("target_longitude", 77.5946)
+                }
+            else:
+                orig_info = get_region_coordinates(alert.region)
+                targ_info = get_target_coordinates()
+                origin = {
+                    "city": orig_info["city"],
+                    "lat": orig_info["lat"],
+                    "lon": orig_info["lon"]
+                }
+                target = {
+                    "city": targ_info["city"],
+                    "lat": targ_info["lat"],
+                    "lon": targ_info["lon"]
+                }
+            map_arcs.append({
+                "id": f"arc-siem-{alert.id}",
+                "origin": origin,
+                "target": target,
+                "severity": alert.severity
+            })
+    except Exception as e:
+        print(f"Error compiling map arcs from siem_alerts: {e}")
+
+    try:
+        recent_attacks = db.query(NetworkAttack).filter(NetworkAttack.latitude.isnot(None)).limit(15).all()
+        for attack in recent_attacks:
+            targ_info = get_target_coordinates()
+            origin = {
+                "city": f"Intel Node {attack.id}",
+                "lat": attack.latitude,
+                "lon": attack.longitude
+            }
+            target = {
+                "city": targ_info["city"],
+                "lat": targ_info["lat"],
+                "lon": targ_info["lon"]
+            }
+            map_arcs.append({
+                "id": f"arc-net-{attack.id}",
+                "origin": origin,
+                "target": target,
+                "severity": 4 if attack.severity_level == 'Low' else (7 if attack.severity_level == 'Medium' else 9)
+            })
+    except Exception as e:
+        print(f"Error compiling map arcs from network_attacks: {e}")
+
+    # Map stats
+    try:
+        top_reg_row = db.query(SiemAlert.region, func.count(SiemAlert.id).label("cnt")).group_by(SiemAlert.region).order_by(func.count(SiemAlert.id).desc()).first()
+        top_origin = top_reg_row[0] if top_reg_row else "North America"
+    except Exception:
+        top_origin = "North America"
+        
+    top_target = "Bangalore HQ"
+    active_rate = round(0.5 + (active_threats % 10) * 0.15, 2)
+    
+    map_stats = {
+        "top_origin": top_origin,
+        "top_target": top_target,
+        "active_rate": active_rate
+    }
+
+    # Incident workflow
+    incidents = []
+    try:
+        recent_alerts_wf = db.query(SiemAlert).order_by(SiemAlert.timestamp.desc()).limit(15).all()
+        for alert in recent_alerts_wf:
+            diff = now_utc - alert.timestamp
+            diff_mins = int(diff.total_seconds() / 60)
+            if diff_mins <= 0:
+                time_str = "just now"
+            elif diff_mins < 60:
+                time_str = f"{diff_mins}m ago"
+            else:
+                diff_hours = diff_mins // 60
+                time_str = f"{diff_hours}h ago"
+                
+            status = "Active"
+            if alert.risk_level == "CRITICAL":
+                status = "Active"
+            elif alert.risk_level == "HIGH":
+                status = "Investigating"
+            else:
+                status = "Resolved"
+                
+            operators = ["AI Containment", "S. Saifudheen", "Operator 04", "Unassigned"]
+            assigned_to = operators[alert.id % len(operators)]
+            
+            incidents.append({
+                "id": alert.event_id,
+                "title": f"{alert.attack_type} Ingress",
+                "status": status,
+                "severity": alert.severity,
+                "time": time_str,
+                "assigned_to": assigned_to
+            })
+    except Exception as e:
+        print(f"Error compiling workflow incidents: {e}")
+
     return {
         "metrics": {
             "totalIncidents": int(total_incidents),
@@ -1014,7 +1239,27 @@ def get_overview(request: Request, source: str = "All", db: Session = Depends(ge
             "usersDelta": float(users_delta),
         },
         "trends": trends_list,
-        "impact": impact_data
+        "impact": impact_data,
+        "threat_score": threat_score,
+        "threat_metrics": {
+            "active_threats": active_threats,
+            "critical_vulns": critical_vulns,
+            "trend_24h": trend_24h
+        },
+        "traffic": {
+            "data": traffic_data,
+            "avg_throughput": avg_throughput,
+            "total_blocked": total_blocked_ips
+        },
+        "endpoints": {
+            "secure": secure_endpoints,
+            "warning": warning_endpoints,
+            "compromised": compromised_endpoints,
+            "total": total_endpoints
+        },
+        "map_arcs": map_arcs,
+        "map_stats": map_stats,
+        "incidents": incidents
     }
 
 @app.get("/api/network")
@@ -1532,4 +1777,4 @@ async def trigger_n8n_workflow(request: Request, payload: N8nTriggerPayload, cur
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=int(os.getenv("PORT", 8001)), reload=True)

@@ -23,9 +23,9 @@ echo      ✓ PostgreSQL is already running.
 
 :db_done
 
-:: 2. Start Backend (FastAPI on port 8000)
-echo [2/3] Checking Backend Server (port 8000)...
-netstat -ano | findstr /r /c:"127.0.0.1:8000 .*LISTENING" /c:"0.0.0.0:8000 .*LISTENING" >nul
+:: 2. Start Backend (FastAPI on port 8001)
+echo [2/3] Checking Backend Server (port 8001)...
+netstat -ano | findstr /r /c:"127.0.0.1:8001 .*LISTENING" /c:"0.0.0.0:8001 .*LISTENING" >nul
 if %errorlevel% equ 0 goto backend_running
 
 echo      Starting Backend (FastAPI)...
@@ -38,12 +38,12 @@ echo      ✓ Backend is already running.
 
 :backend_done
 
-:: 3. Start Frontend (Vite on port 5173)
-echo [3/3] Checking Frontend Server (port 5173)...
-netstat -ano | findstr /r /c:"127.0.0.1:5173 .*LISTENING" /c:"0.0.0.0:5173 .*LISTENING" >nul
+:: 3. Start Frontend (Next.js on port 3000)
+echo [3/3] Checking Frontend Server (port 3000)...
+netstat -ano | findstr /r /c:"127.0.0.1:3000 .*LISTENING" /c:"0.0.0.0:3000 .*LISTENING" >nul
 if %errorlevel% equ 0 goto frontend_running
 
-echo      Starting Frontend (Vite)...
+echo      Starting Frontend (Next.js)...
 start "CyberOracle Enterprise Frontend" cmd /k "cd /d D:\CyberOracle-Enterprise\frontend && npm.cmd run dev"
 ping 127.0.0.1 -n 4 >nul
 goto frontend_done
@@ -56,12 +56,12 @@ echo      ✓ Frontend is already running.
 :: Open Browser
 echo.
 echo  Opening dashboard in browser...
-start http://127.0.0.1:5173
+start http://127.0.0.1:3000
 
 echo.
 echo  ✓ Database  → http://127.0.0.1:5432 (Running in background)
-echo  ✓ Backend   → http://127.0.0.1:8000
-echo  ✓ Frontend  → http://127.0.0.1:5173
+echo  ✓ Backend   → http://127.0.0.1:8001
+echo  ✓ Frontend  → http://127.0.0.1:3000
 echo.
 echo  Press any key to exit this launcher...
 pause >nul
