@@ -99,8 +99,10 @@ def verify_password(plain_password, hashed_password):
             _argon2_hasher.verify(hashed_password, plain_password)
             return True
         except argon2.exceptions.VerifyMismatchError:
+            print("[DEBUG] Argon2 verify mismatch: password does not match hash")
             return False
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Argon2 verify exception: {e}")
             return False
 
     # Fallback to bcrypt for legacy hashes
