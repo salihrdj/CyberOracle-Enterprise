@@ -409,7 +409,8 @@ class ConnectionManager:
         self.active_connections: List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
-        await websocket.accept()
+        subprotocol = websocket.headers.get("sec-websocket-protocol")
+        await websocket.accept(subprotocol=subprotocol)
         self.active_connections.append(websocket)
         print(f"WebSocket Client connected. Active sessions: {len(self.active_connections)}")
 

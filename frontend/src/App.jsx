@@ -252,7 +252,7 @@ function App() {
       };
 
       fetchAlerts();
-      pollInterval = setInterval(fetchAlerts, 5000);
+      pollInterval = setInterval(fetchAlerts, 10000);
     };
 
     const isPollOnly = typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_POLL_ONLY === 'true';
@@ -263,7 +263,7 @@ function App() {
       };
     }
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(WS_URL, ["auth." + token]);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
