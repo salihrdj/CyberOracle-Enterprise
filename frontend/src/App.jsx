@@ -15,16 +15,20 @@ import {
 } from 'lucide-react';
 
 const getApiBase = () => {
+  let url = 'http://127.0.0.1:8000/api';
   if (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL;
-  }
-  if (typeof window !== 'undefined') {
+    url = process.env.NEXT_PUBLIC_API_URL;
+  } else if (typeof window !== 'undefined') {
     if (window.location.port === '3000' || window.location.port === '5173') {
-      return 'http://127.0.0.1:8000/api';
+      url = 'http://127.0.0.1:8000/api';
+    } else {
+      url = '/api/backend';
     }
-    return '/api/backend';
   }
-  return 'http://127.0.0.1:8000/api';
+  if (url !== '/api/backend' && !url.endsWith('/api') && !url.endsWith('/api/')) {
+    url = url.endsWith('/') ? `${url}api` : `${url}/api`;
+  }
+  return url;
 };
 
 const apiBase = getApiBase();
