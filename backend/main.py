@@ -789,6 +789,7 @@ class LoginRequest(BaseModel):
 @limiter.limit("60/minute")
 def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
     print(f"[DEBUG] Login attempt: username={req.username}")
+    print(f"[DEBUG] Password length received: {len(req.password)}")
     try:
         from database import DATABASE_URL
         import urllib.parse
