@@ -673,26 +673,28 @@ function App() {
             <div className="space-y-6">
               {/* Event stats cards */}
               <div className="grid grid-cols-4 gap-6">
-                <div className="glass p-5">
+                <div className="glass card-obsidian-info p-5">
                   <p className="text-[10px] text-txt-faint font-mono uppercase tracking-wider">Sensor Ingest Influx</p>
-                  <p className="text-2xl font-bold text-sky mt-1">{livePaused ? "PAUSED" : "ACTIVE"}</p>
+                  <p className={`text-2xl font-bold mt-1 ${livePaused ? "text-cyber-orange" : "text-cyber-green"}`}>
+                    {livePaused ? "PAUSED" : "ACTIVE"}
+                  </p>
+                  <div className="metric-glow w-16" style={{ '--glow-color': '#34d399' }} />
+                </div>
+                <div className="glass card-obsidian-accent p-5">
+                  <p className="text-[10px] text-txt-faint font-mono uppercase tracking-wider">Ingested Alerts</p>
+                  <p className="text-2xl font-bold text-cyber-cyan mt-1">{liveIncidents.length}</p>
                   <div className="metric-glow w-16" style={{ '--glow-color': '#38bdf8' }} />
                 </div>
-                <div className="glass p-5">
-                  <p className="text-[10px] text-txt-faint font-mono uppercase tracking-wider">Ingested Alerts</p>
-                  <p className="text-2xl font-bold text-white mt-1">{liveIncidents.length}</p>
-                  <div className="metric-glow w-16" style={{ '--glow-color': '#ffffff' }} />
-                </div>
-                <div className="glass p-5">
+                <div className="glass card-obsidian-critical p-5">
                   <p className="text-[10px] text-txt-faint font-mono uppercase tracking-wider">Critical Anomalies</p>
-                  <p className="text-2xl font-bold text-rose mt-1">
+                  <p className="text-2xl font-bold text-cyber-red mt-1">
                     {liveIncidents.filter(i => i.risk_level === 'CRITICAL').length}
                   </p>
                   <div className="metric-glow w-16" style={{ '--glow-color': '#fb7185' }} />
                 </div>
-                <div className="glass p-5">
+                <div className="glass card-obsidian-warning p-5">
                   <p className="text-[10px] text-txt-faint font-mono uppercase tracking-wider">Average Threat Score</p>
-                  <p className="text-2xl font-bold text-amber mt-1">
+                  <p className="text-2xl font-bold text-cyber-orange mt-1">
                     {liveIncidents.length > 0
                       ? Math.round(liveIncidents.reduce((sum, item) => sum + item.threat_score, 0) / liveIncidents.length)
                       : 0}
@@ -725,30 +727,36 @@ function App() {
                         Waiting for alerts from WebSocket channel...
                       </div>
                     ) : (
-                      liveIncidents.map((incident) => (
-                        <div 
-                          key={incident.id} 
-                          onClick={() => {
-                            setSelectedAlert(incident);
-                            setAiReportDossier("");
-                            setN8nDispatchResult(null);
-                          }}
-                          className={`p-3.5 rounded-xl border transition cursor-pointer ${selectedAlert?.id === incident.id ? 'bg-white/10 border-sky/30 shadow-md' : 'bg-white/5 border-white/5 hover:bg-white/8'}`}
-                        >
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <p className="text-xs font-semibold text-white">{incident.attack_type}</p>
-                              <p className="text-[10px] text-txt-dim mt-0.5">{incident.industry} · {incident.region}</p>
-                            </div>
-                            <div className="text-right">
-                              <span className={`px-2 py-0.5 rounded text-[9px] font-bold font-mono ${incident.risk_level === 'CRITICAL' ? 'bg-rose/10 text-rose border border-rose/25' : incident.risk_level === 'HIGH' ? 'bg-amber/10 text-amber border border-amber/25' : 'bg-sky/10 text-sky border border-sky/25'}`}>
-                                {incident.risk_level}
-                              </span>
-                              <p className="text-[9px] text-txt-faint mt-1 font-mono">{incident.timestamp.split(' ')[1]}</p>
+                      liveIncidents.map((incident) => {
+                        const isCritical = incident.risk_level === 'CRITICAL';
+                        const isHigh = incident.risk_level === 'HIGH';
+                        const isMedium = incident.risk_level === 'MEDIUM';
+                        const borderLeftColor = isCritical ? 'border-l-rose-500' : isHigh ? 'border-l-amber-500' : isMedium ? 'border-l-sky-500' : 'border-l-emerald-500';
+                        return (
+                          <div 
+                            key={incident.id} 
+                            onClick={() => {
+                              setSelectedAlert(incident);
+                              setAiReportDossier("");
+                              setN8nDispatchResult(null);
+                            }}
+                            className={`p-3.5 rounded-xl border border-l-4 ${borderLeftColor} obsidian-item-hover transition cursor-pointer ${selectedAlert?.id === incident.id ? 'bg-white/10 border-sky/30 shadow-md' : 'bg-white/5 border-white/5'}`}
+                          >
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <p className="text-xs font-semibold text-white">{incident.attack_type}</p>
+                                <p className="text-[10px] text-txt-dim mt-0.5">{incident.industry} · {incident.region}</p>
+                              </div>
+                              <div className="text-right">
+                                <span className={`px-2 py-0.5 rounded text-[9px] font-bold font-mono ${isCritical ? 'obsidian-badge-critical' : isHigh ? 'obsidian-badge-high' : isMedium ? 'obsidian-badge-medium' : 'obsidian-badge-low'}`}>
+                                  {incident.risk_level}
+                                </span>
+                                <p className="text-[9px] text-txt-faint mt-1 font-mono">{incident.timestamp.split(' ')[1]}</p>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -818,14 +826,14 @@ function App() {
                         <button 
                           onClick={() => generatePlaybookDossier(selectedAlert)}
                           disabled={aiReportLoading}
-                          className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition border border-white/10 cursor-pointer disabled:opacity-50"
+                          className="flex-1 py-3 btn-obsidian-hologram rounded-xl disabled:opacity-50 cursor-pointer"
                         >
                           {aiReportLoading ? 'Compiling AI Response...' : 'Request AI Response Dossier'}
                         </button>
                         <button 
                           onClick={() => dispatchSoarWebhook(selectedAlert)}
                           disabled={isDispatching}
-                          className="flex-1 py-3 bg-gradient-to-r from-lavender/80 to-sky/80 hover:brightness-110 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition border border-white/10 cursor-pointer disabled:opacity-50"
+                          className="flex-1 py-3 btn-obsidian-hologram rounded-xl disabled:opacity-50 cursor-pointer"
                         >
                           {isDispatching ? 'Dispatching Playbook...' : 'Trigger SOAR Webhook'}
                         </button>
