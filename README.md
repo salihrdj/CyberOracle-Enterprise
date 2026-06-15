@@ -1,10 +1,10 @@
-# 🛡️ CyberOracle Enterprise
+#  CyberOracle Enterprise
 
 **CyberOracle Enterprise** is an enterprise-grade, intelligence-driven cybersecurity threat intelligence, vulnerability scanning, and predictive analytics suite. It merges full-stack web engineering, machine learning-driven threat forecasting, multi-provider generative AI diagnostics, and network-level security scanning into a unified, high-performance dashboard.
 
 ---
 
-## 📊 Architecture Overview
+##  Architecture Overview
 
 ```mermaid
 graph TD
@@ -47,7 +47,7 @@ graph TD
 
 ---
 
-## 🔥 Key Capabilities
+##  Key Capabilities
 
 ### 1. Multi-Engine AI Threat Analyst
 - **Real-Time Streamed Analysis**: Uses a custom AI Analyst orchestrator supporting **Groq (LLaMA 3.3)**, **Google Gemini 2.0 Flash**, and **Anthropic Claude 3.5 Sonnet** to deliver streamed, highly technical threat explanations and remediation guides.
@@ -74,7 +74,7 @@ graph TD
 
 ---
 
-## 📁 Repository Directory Structure
+##  Repository Directory Structure
 
 ```text
 ├── backend/
@@ -103,7 +103,7 @@ graph TD
 
 ---
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 - Python 3.9+
@@ -166,6 +166,6 @@ To run services manually:
 
 ---
 
-## 🔒 License
+## License
 
 This enterprise platform is distributed under the MIT License. Detail specifications can be found in the LICENSE file.
