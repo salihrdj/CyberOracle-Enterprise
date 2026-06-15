@@ -786,8 +786,15 @@ class LoginRequest(BaseModel):
 @app.post("/api/auth/login")
 @limiter.limit("60/minute")
 def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
+    print(f"[DEBUG] Login attempt: username={req.username}")
     user = db.query(User).filter(User.username == req.username).first()
-    if not user or not verify_password(req.password, user.password_hash):
+    print(f"[DEBUG] User found in DB: {user is not None}")
+    if user:
+        is_verified = verify_password(req.password, user.password_hash)
+        print(f"[DEBUG] Password verify success: {is_verified}")
+        if not is_verified:
+            raise HTTPException(status_code=400, detail="Invalid credentials. Access Denied.")
+    else:
         raise HTTPException(status_code=400, detail="Invalid credentials. Access Denied.")
 
     # Upgrade legacy bcrypt hashes to Argon2id on successful login
