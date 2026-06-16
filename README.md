@@ -1,10 +1,15 @@
 #  CyberOracle Enterprise
 
-**CyberOracle Enterprise** is an enterprise-grade, intelligence-driven cybersecurity threat intelligence, vulnerability scanning, and predictive analytics suite. It merges full-stack web engineering, machine learning-driven threat forecasting, multi-provider generative AI diagnostics, and network-level security scanning into a unified, high-performance dashboard.
+### 🚀 What this does
+An enterprise-grade security operations console that:
+1. Performs multi-threaded, target-authorized vulnerability scanning across network ranges.
+2. Forecasts future attack trends and regional threat indices using a Scikit-learn ML engine.
+3. Automatically compiles context-aware remediation playbooks using streaming Groq, Gemini, and Claude APIs.
 
 ---
 
 ##  Architecture Overview
+
 
 ```mermaid
 graph TD

@@ -272,6 +272,7 @@ function App() {
 
     let isPolled = false;
     let pollInterval = null;
+    let retryTimeoutId = null;
 
     const startPolling = () => {
       if (isPolled) return;
@@ -279,10 +280,16 @@ function App() {
       console.log("Starting HTTP fallback polling for SIEM alerts...");
       
       const fetchAlerts = async () => {
+        if (!token) return;
         try {
           const res = await fetch(`${API}/threats/live`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
+          if (res.status === 401) {
+            console.warn("Unauthorized API access (fetchAlerts) - logging out...");
+            handleLogout();
+            return;
+          }
           if (res.ok) {
             const data = await res.json();
             setLiveIncidents(data);
@@ -311,6 +318,7 @@ function App() {
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
+      if (wsRef.current !== ws) return;
       const msg = JSON.parse(event.data);
       if (msg.type === "INITIAL_CACHE") {
         setLiveIncidents(msg.data);
@@ -348,26 +356,36 @@ function App() {
     };
 
     ws.onerror = (e) => {
+      if (wsRef.current !== ws) return;
       console.error("WebSocket closed/error:", e);
       startPolling();
     };
 
-    ws.onclose = () => {
-      console.log("WebSocket stream closed.");
+    ws.onclose = (event) => {
+      if (wsRef.current !== ws) return;
+      console.log("WebSocket stream closed.", event.code, event.reason);
+      if (event.code === 4001) {
+        console.warn("WebSocket closed due to auth failure - logging out...");
+        handleLogout();
+        return;
+      }
       if (!isPolled) {
-        const timeoutId = setTimeout(() => {
+        retryTimeoutId = setTimeout(() => {
+          if (wsRef.current !== ws) return;
           setWsTrigger(prev => prev + 1);
         }, 5000);
-        return () => clearTimeout(timeoutId);
       }
     };
 
     return () => {
-      if (wsRef.current) {
+      if (wsRef.current === ws) {
         wsRef.current.close();
         wsRef.current = null;
+      } else if (ws) {
+        ws.close();
       }
       if (pollInterval) clearInterval(pollInterval);
+      if (retryTimeoutId) clearTimeout(retryTimeoutId);
     };
   }, [token, page, livePaused, wsTrigger]);
 
@@ -403,6 +421,23 @@ function App() {
     setN8nDispatchResult(null);
     if (wsRef.current) wsRef.current.close();
   };
+
+  // Global Axios Interceptor to handle token expiration (401 Unauthorized)
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      response => response,
+      error => {
+        if (error.response && error.response.status === 401) {
+          console.warn("Unauthorized API access - logging out...");
+          handleLogout();
+        }
+        return Promise.reject(error);
+      }
+    );
+    return () => {
+      axios.interceptors.response.eject(interceptor);
+    };
+  }, [token]);
 
   // Threat Quick Scanner
   const scanIp = () => {
@@ -448,6 +483,11 @@ function App() {
         },
         body: JSON.stringify({ query: q })
       });
+      if (response.status === 401) {
+        console.warn("Unauthorized API access (sendChat) - logging out...");
+        handleLogout();
+        return;
+      }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       setIsChatting(false);
@@ -496,6 +536,11 @@ function App() {
           explainability: alertItem.explainability || {}
         })
       });
+      if (response.status === 401) {
+        console.warn("Unauthorized API access (generatePlaybookDossier) - logging out...");
+        handleLogout();
+        return;
+      }
       if (response.ok) {
         const result = await response.json();
         setAiReportDossier(result.ai_analysis_report);
