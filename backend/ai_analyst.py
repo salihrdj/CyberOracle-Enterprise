@@ -9,6 +9,7 @@ load_dotenv()
 # Config
 AI_PROVIDER = os.getenv("AI_PROVIDER", "groq").lower()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 
@@ -37,7 +38,7 @@ def analyze_threat(query: str, context_data: str = "") -> str:
             return "⚠️ GROQ_API_KEY not configured. Set it in your .env file."
         try:
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=GROQ_MODEL,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": query},
@@ -114,7 +115,7 @@ def analyze_threat_stream(query: str, context_data: str = ""):
             return
         try:
             stream = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=GROQ_MODEL,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": query},

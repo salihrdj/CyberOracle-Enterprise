@@ -169,6 +169,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, k
 
 
 def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None, key_id: Optional[str] = None):
+    import uuid
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -177,6 +178,7 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None, 
     to_encode.update({
         "exp": expire,
         "iat": datetime.utcnow(),
+        "jti": str(uuid.uuid4()),
         "type": "refresh",
         "aud": JWT_AUDIENCE,
         "iss": JWT_ISSUER,

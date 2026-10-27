@@ -300,13 +300,14 @@ def predict_cyberoracle_forecast(region: str, year: int, month: str, db: Session
         return {"error": "Insufficient threat data in database to perform predictions."}
         
     source_encoded = 1 if region == "Global" else 0
-    month_encoded_input = MONTH_ENCODING_MAP[month]
+    month_clean = month.strip()[:3].capitalize() if (month and isinstance(month, str)) else "Jan"
+    month_encoded_input = MONTH_ENCODING_MAP.get(month_clean, 0)
     
     historical_source = attack_trend_df[attack_trend_df["source_encoded"] == source_encoded]
     base_attacks = historical_source["attack_count"].mean() if not historical_source.empty else 100.0
 
     growth_factor = 1 + ((year - 2025) * 0.12)
-    month_boost = 1.20 if month in ["Jan", "Oct", "Nov", "Dec"] else (0.92 if month in ["Jun", "Jul", "Aug"] else 1.0)
+    month_boost = 1.20 if month_clean in ["Jan", "Oct", "Nov", "Dec"] else (0.92 if month_clean in ["Jun", "Jul", "Aug"] else 1.0)
     last_attacks = base_attacks * growth_factor * month_boost
 
     attack_input = pd.DataFrame([[year, source_encoded, last_attacks, month_encoded_input]], 
